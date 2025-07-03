@@ -1,0 +1,24 @@
+[project]
+name = "mockexchange"
+version = "0.1.0"
+description = "Headless exchange emulator backed by Valkey (Redis fork)"
+authors = [{ name = "Didac" }]
+requires-python = ">=3.11"
+dependencies = [
+  "redis>=5.0",
+  "fastapi>=0.111",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "black"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.urls]
+Homepage   = "https://github.com/didac-crst/mockexchange-api"
+
+[project.scripts]
+mockx = "mockexchange.cli:cli"
