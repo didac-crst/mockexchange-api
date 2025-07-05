@@ -74,7 +74,7 @@ class ExchangeEngine:
                      quote: str,
                      amount: float,
                      filled: float,
-                     price: float) -> None:
+                     price: float) -> Dict[str, float]:
         """
         Execute a buy order by:
         """
@@ -93,13 +93,20 @@ class ExchangeEngine:
         asset = self.portfolio.get(base)
         asset.free += filled
         self.portfolio.set(asset)
+        transaction_info = {
+            "price": price,
+            "notion": real_notion,
+            "filled": filled,
+            "fee": real_fee,
+        }
+        return transaction_info
     
     def _execute_sell(self,
                       base: str,
                       quote: str,
                       amount: float,
                       filled: float,
-                      price: float) -> None:
+                      price: float) -> Dict[str, float]:
         """
         Execute a sell order by:
         """
@@ -120,7 +127,14 @@ class ExchangeEngine:
         cash.free -= real_fee
         cash.free += real_notion
         self.portfolio.set(cash)
-    
+        transaction_info = {
+            "price": price,
+            "notion": real_notion,
+            "filled": filled,
+            "fee": real_fee,
+        }
+        return transaction_info
+
     @staticmethod
     def _filled_amount(amount: float, min_fill: float = 1.0) -> float:
         """
@@ -191,8 +205,8 @@ class ExchangeEngine:
         _price = None if type == "market" else price
         order = Order(
             id=self._uid(), symbol=symbol, side=side, type=type,
-            amount=amount, price=_price,
-            fee_rate=self.commission, fee_cost=fee, fee_currency=quote,
+            amount=amount, price=_price, notion_currency=quote,
+            fee_rate=self.commission, fee_currency=quote,
             status="open", filled=0.0,
             ts_post=int(time.time()*1000), ts_exec=None,
         )
@@ -204,7 +218,7 @@ class ExchangeEngine:
             price = self.market.last_price(symbol)
             # --- settle ----------------------------------------------------
             if side == "buy":
-                self._execute_buy(
+                transaction_info = self._execute_buy(
                     base=base,
                     quote=quote,
                     amount=amount,
@@ -212,7 +226,7 @@ class ExchangeEngine:
                     price=price,
                 )
             else:  # sell
-                self._execute_sell(
+                transaction_info = self._execute_sell(
                     base=base,
                     quote=quote,
                     amount=amount,
@@ -222,7 +236,10 @@ class ExchangeEngine:
 
             # --- flip order to CLOSED -------------------------------------
             order.status  = "closed"
-            order.filled  = amount
+            order.price   = transaction_info["price"]
+            order.filled  = transaction_info["filled"]
+            order.notion  = transaction_info["notion"]
+            order.fee_cost = transaction_info["fee"]
             order.ts_exec = int(time.time()*1000)
             self.order_book.update(order)             # overwrite
 
@@ -249,7 +266,7 @@ class ExchangeEngine:
 
             # release reserved & settle
             if o.side == "buy":
-                self._execute_buy(
+                transaction_info = self._execute_buy(
                     base=base,
                     quote=quote,
                     amount=o.amount,
@@ -257,7 +274,7 @@ class ExchangeEngine:
                     price=price,
                 )
             else:  # sell
-                self._execute_sell(
+                transaction_info = self._execute_sell(
                     base=base,
                     quote=quote,
                     amount=o.amount,
@@ -266,7 +283,10 @@ class ExchangeEngine:
                 )
 
             o.status = "closed"
-            o.filled = o.amount
+            o.price = transaction_info["price"]
+            o.notion = transaction_info["notion"]
+            o.fee_cost = transaction_info["fee"]
+            o.filled = transaction_info["filled"]
             o.ts_exec = int(time.time()*1000)
             self.order_book.update(o)
 

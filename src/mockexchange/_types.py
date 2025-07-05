@@ -99,14 +99,15 @@ class Order:
     side: str
     type: str
     amount: float
-    price: Optional[float]  # None for market orders
-    fee_rate: float
-    fee_cost: float
+    notion_currency: str  # usually the quote currency, e.g. USDT
     fee_currency: str
-
+    fee_rate: float
     # Runtime-mutable fields
+    price: Optional[float] = None  # None for market orders
     status: str = "open"
-    filled: float = 0.0
+    filled: float = 0.0 # until filled
+    notion: float = 0.0 # until filled
+    fee_cost: float = 0.0 #  until filled
     ts_post: int = field(default_factory=lambda: int(time.time() * 1000))
     ts_exec: Optional[int] = None  # updated when status→closed
 
