@@ -192,15 +192,17 @@ class ExchangeEngine:
             self.order_book.update(o)
 
     # ---------------------- admin helpers ----------------------------- #
-    def set_balance(self, asset: str, free: float = 0.0, used: float = 0.0) -> None:
+    def set_balance(self, asset: str, free: float = 0.0, used: float = 0.0) -> Dict[str, Any]:
         if free < 0 or used < 0:
             raise ValueError("free/used must be ≥ 0")
         self.portfolio.set(AssetBalance(asset, free, used))
+        return self.portfolio.get(asset).to_dict()
 
     def fund_asset(self, asset: str, amount: float) -> Dict[str, Any]:
         if amount <= 0:
             raise ValueError("amount must be > 0")
-        bal = self.portfolio.get(asset); bal.free += amount
+        bal = self.portfolio.get(asset)
+        bal.free += amount
         self.portfolio.set(bal)
         return bal.to_dict()
 
