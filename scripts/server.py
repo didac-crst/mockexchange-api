@@ -41,12 +41,12 @@ class OrderReq(BaseModel):
     price:  float | None = None      # only for limit orders
 
 class BalanceReq(BaseModel):
-    asset: str = Field(..., pattern=r"^[A-Z0-9_\-]+$")
-    free:  float = Field(0.0, ge=0)
+    asset: str = "USDT"
+    free:  float = Field(100000.0, ge=0)
     used:  float = Field(0.0, ge=0)
 
 class FundReq(BaseModel):
-    amount: float = Field(..., gt=0)
+    amount: float = Field(1.0, gt=0)
 
 
 # ───────────────────── initialise singleton engine ───────────────────── #
