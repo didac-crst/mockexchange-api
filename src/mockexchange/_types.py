@@ -50,32 +50,32 @@ class AssetBalance:
             used=float(d.get("used", 0.0)),
         )
 
-@dataclass
-class Order:
-    id: str
-    symbol: str                # e.g. "BTC/USDT"
-    side: str                  # OrderSide.BUY / SELL
-    type: str                  # OrderType.MARKET / LIMIT
-    amount: float
-    price: Optional[float]     # None for market
-    fee_rate: float
-    fee_cost: float
-    fee_currency: str          # typically USDT
-    status: str = "open"
-    filled: float = 0.0
-    ts_post: int = field(default_factory=lambda: int(time.time() * 1000))
-    ts_exec: Optional[int] = None               # filled when CLOSED
+# @dataclass
+# class Order:
+#     id: str
+#     symbol: str                # e.g. "BTC/USDT"
+#     side: str                  # OrderSide.BUY / SELL
+#     type: str                  # OrderType.MARKET / LIMIT
+#     amount: float
+#     price: Optional[float]     # None for market
+#     fee_rate: float
+#     fee_cost: float
+#     fee_currency: str          # typically USDT
+#     status: str = "open"
+#     filled: float = 0.0
+#     ts_post: int = field(default_factory=lambda: int(time.time() * 1000))
+#     ts_exec: Optional[int] = None               # filled when CLOSED
 
-    # (de)serialise helpers
-    def dumps(self) -> Dict[str, Any]:
-        return {k: (v if not isinstance(v, set) else list(v)) for k, v in self.__dict__.items()}
+#     # (de)serialise helpers
+#     def dumps(self) -> Dict[str, Any]:
+#         return {k: (v if not isinstance(v, set) else list(v)) for k, v in self.__dict__.items()}
 
-    @classmethod
-    def loads(cls, d: Dict[str, Any]) -> "Order":
-        # tolerate older blobs that miss ts_exec
-        if "ts_exec" not in d:
-            d["ts_exec"] = None
-        return cls(**d)
+#     @classmethod
+#     def loads(cls, d: Dict[str, Any]) -> "Order":
+#         # tolerate older blobs that miss ts_exec
+#         if "ts_exec" not in d:
+#             d["ts_exec"] = None
+#         return cls(**d)
 
 @dataclass
 class Order:
