@@ -170,22 +170,31 @@ class ExchangeEngine:
 
             # release reserved & settle
             if o.side == "buy":
-                self._release(quote, notion + fee)          # unlock cash
+                # Release reserved quote (notion + fee)
+                # and reduces cash from quote balance
+                self._release(quote, notion + fee)
                 cash = self.portfolio.get(quote)
-                cash.free -= notion + fee                        # total cost paid
+                cash.free -= (notion + fee)  # deduct fee
+                self.portfolio.set(cash)
+                # Increase asset amount in portfolio
                 asset = self.portfolio.get(base)
                 asset.free += o.amount
-                self.portfolio.set(cash)
                 self.portfolio.set(asset)
             else:  # sell
+                # Release reserved base (asset)
+                # and reduces asset amount in portfolio
                 self._release(base, o.amount)
-                cash = self.portfolio.get(quote)
-                cash.used  -= o.fee_cost            # fee consumed
-                cash.free  += (notion - o.fee_cost) # net proceeds
-                self.portfolio.set(cash)
-                asset = self.portfolio.get(base)    # nothing more to charge
-                asset.free -= o.amount   # ← subtract sold amount
+                asset = self.portfolio.get(base)
+                asset.free -= o.amount   # subtract sold amount
                 self.portfolio.set(asset)
+                # Release reserved fee (quote)
+                # and increases cash in quote balance
+                self._release(quote, fee)
+                cash = self.portfolio.get(quote)
+                cash.free -= fee
+                cash.free += notion
+                self.portfolio.set(cash)
+
 
             o.status = "closed"; o.filled = o.amount
             o.ts_exec = int(time.time()*1000)
