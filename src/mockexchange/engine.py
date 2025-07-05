@@ -193,11 +193,12 @@ class ExchangeEngine:
             raise ValueError("free/used must be ≥ 0")
         self.portfolio.set(AssetBalance(asset, free, used))
 
-    def fund_asset(self, asset: str, amount: float) -> None:
+    def fund_asset(self, asset: str, amount: float) -> Dict[str, Any]:
         if amount <= 0:
             raise ValueError("amount must be > 0")
         bal = self.portfolio.get(asset); bal.free += amount
         self.portfolio.set(bal)
+        return bal.to_dict()
 
     def reset(self) -> None:
         self.portfolio.clear(); self.order_book.clear()
