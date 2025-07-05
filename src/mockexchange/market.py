@@ -42,7 +42,6 @@ class Market:
             # Just log once and skip this symbol
             logger.warning("Malformed ticker blob for %s: %s", symbol, h)
             return None
-
         return {
             "symbol": symbol,
             "last":   price,
@@ -53,3 +52,14 @@ class Market:
             "ask_volume": float(h.get("askVolume", 0.0)),
             "info": h,
         }
+    
+    def last_price(self, symbol: str) -> float:
+        """
+        Return the last price of the ticker.
+
+        :raises RuntimeError: if the ticker is not available
+        """
+        ticker = self.fetch_ticker(symbol)
+        if ticker is None:
+            raise RuntimeError(f"Ticker for {symbol} not available")
+        return ticker["last"]

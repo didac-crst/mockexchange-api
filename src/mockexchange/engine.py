@@ -12,6 +12,8 @@ from .portfolio import Portfolio
 from .orderbook import OrderBook
 from ._types import Order, OrderSide, OrderType, OrderState, AssetBalance
 
+MIN_FILL = 1.0  # minimum fill factor for market orders, 1.0 = 100%
+
 @dataclass
 class ExchangeEngine:
     """
@@ -58,48 +60,73 @@ class ExchangeEngine:
         bal.used -= qty;  bal.free += qty
         self.portfolio.set(bal)
 
+    def _get_booked_real_amounts(self, amount: float, filled: float, price: float) -> Dict[str, float]:
+        """ Calculate booked and real amounts for an order. """
+        fee_rate = self.commission
+        booked_notion = amount * price
+        booked_fee = booked_notion * fee_rate
+        real_notion = filled * price
+        real_fee = real_notion * fee_rate
+        return { "booked_notion": booked_notion, "booked_fee": booked_fee, "real_notion": real_notion, "real_fee": real_fee }
+
     def _execute_buy(self,
                      base: str,
                      quote: str,
                      amount: float,
-                     notion: float,
-                     fee: float) -> None:
+                     filled: float,
+                     price: float) -> None:
         """
         Execute a buy order by:
         """
+        _real_amounts = self._get_booked_real_amounts(amount, filled, price)
+        booked_notion = _real_amounts["booked_notion"]
+        booked_fee = _real_amounts["booked_fee"]
+        real_notion = _real_amounts["real_notion"]
+        real_fee = _real_amounts["real_fee"]
         # Release reserved quote (notion + fee)
         # and reduces cash from quote balance
-        self._release(quote, notion + fee)
+        self._release(quote, booked_notion + booked_fee)
         cash = self.portfolio.get(quote)
-        cash.free -= (notion + fee)  # deduct fee
+        cash.free -= (real_notion + real_fee)
         self.portfolio.set(cash)
         # Increase asset amount in portfolio
         asset = self.portfolio.get(base)
-        asset.free += amount
+        asset.free += filled
         self.portfolio.set(asset)
     
     def _execute_sell(self,
                       base: str,
                       quote: str,
                       amount: float,
-                      notion: float,
-                      fee: float) -> None:
+                      filled: float,
+                      price: float) -> None:
         """
         Execute a sell order by:
         """
+        _real_amounts = self._get_booked_real_amounts(amount, filled, price)
+        booked_fee = _real_amounts["booked_fee"]
+        real_notion = _real_amounts["real_notion"]
+        real_fee = _real_amounts["real_fee"]
         # Release reserved base (asset)
         # and reduces asset amount in portfolio
         self._release(base, amount)
         asset = self.portfolio.get(base)
-        asset.free -= amount   # subtract sold amount
+        asset.free -= filled   # subtract sold amount
         self.portfolio.set(asset)
         # Release reserved fee (quote)
         # and increases cash in quote balance
-        self._release(quote, fee)
+        self._release(quote, booked_fee)
         cash = self.portfolio.get(quote)
-        cash.free -= fee
-        cash.free += notion
+        cash.free -= real_fee
+        cash.free += real_notion
         self.portfolio.set(cash)
+    
+    @staticmethod
+    def _filled_amount(amount: float, min_fill: float = 1.0) -> float:
+        """
+        Returns the filled amount based on a random factor.
+        """
+        return amount * random.uniform(min_fill, 1.0)
 
     # ------------------------------------------------ can-execute ------ #
     def _can_execute(self, symbol: str, side: str,
@@ -120,7 +147,10 @@ class ExchangeEngine:
 
     # ------------------------------------------------ public API ------- #
     def fetch_ticker(self, symbol: str) -> Dict[str, Any]:
-        return self.market.fetch_ticker(symbol)
+        ticker = self.market.fetch_ticker(symbol)
+        if ticker is None:
+            raise ValueError(f"Ticker for {symbol} not available")
+        return ticker
 
     def fetch_balance(self) -> Dict[str, Any]:
         return {a: b.to_dict() for a, b in self.portfolio.all().items()}
@@ -141,7 +171,7 @@ class ExchangeEngine:
         if type == "limit" and price is None:
             raise ValueError("limit orders need price")
 
-        px      = price or self.market.fetch_ticker(symbol)["last"]
+        px      = price or self.market.last_price(symbol)
         base, quote = symbol.split("/")
         notion  = amount * px
         fee     = notion * self.commission
@@ -158,9 +188,10 @@ class ExchangeEngine:
             self._reserve(quote, fee)
 
         # ---------- write OPEN order to Valkey ----------------------------
+        _price = None if type == "market" else price
         order = Order(
             id=self._uid(), symbol=symbol, side=side, type=type,
-            amount=amount, price=px,
+            amount=amount, price=_price,
             fee_rate=self.commission, fee_cost=fee, fee_currency=quote,
             status="open", filled=0.0,
             ts_post=int(time.time()*1000), ts_exec=None,
@@ -170,37 +201,24 @@ class ExchangeEngine:
         # ---------- market ⇒ wait & fill ----------------------------------
         if type == "market":
             await asyncio.sleep(random.uniform(1.0, 5.0))       # dev-only latency
-
+            price = self.market.last_price(symbol)
             # --- settle ----------------------------------------------------
             if side == "buy":
                 self._execute_buy(
                     base=base,
                     quote=quote,
                     amount=amount,
-                    notion=notion,
-                    fee=fee
+                    filled=self._filled_amount(amount, MIN_FILL),
+                    price=price,
                 )
-                # # release reservation, then final booking
-                # self._release(quote, notion + fee)
-                # cash  = self.portfolio.get(quote)
-                # cash.free -= fee
-                # asset = self.portfolio.get(base)
-                # asset.free += amount
-                # self.portfolio.set(cash)
-                # self.portfolio.set(asset)
             else:  # sell
                 self._execute_sell(
                     base=base,
                     quote=quote,
                     amount=amount,
-                    notion=notion,
-                    fee=fee
+                    filled=self._filled_amount(amount, MIN_FILL),
+                    price=price,
                 )
-                # self._release(base, amount)
-                # self._release(quote, fee)             # fee leaves ‘used’
-                # cash  = self.portfolio.get(quote)
-                # cash.free += (notion - fee)
-                # self.portfolio.set(cash)
 
             # --- flip order to CLOSED -------------------------------------
             order.status  = "closed"
@@ -225,8 +243,9 @@ class ExchangeEngine:
                 continue
 
             base, quote = symbol.split("/")
-            notion = o.amount * o.price
-            fee = notion * o.fee_rate
+            price = o.price
+            if price is None:  # market order
+                raise ValueError("Cannot process market orders in process_price_tick()")
 
             # release reserved & settle
             if o.side == "buy":
@@ -234,43 +253,20 @@ class ExchangeEngine:
                     base=base,
                     quote=quote,
                     amount=o.amount,
-                    notion=notion,
-                    fee=fee
+                    filled=self._filled_amount(o.amount, MIN_FILL),
+                    price=price,
                 )
-                # # Release reserved quote (notion + fee)
-                # # and reduces cash from quote balance
-                # self._release(quote, notion + fee)
-                # cash = self.portfolio.get(quote)
-                # cash.free -= (notion + fee)  # deduct fee
-                # self.portfolio.set(cash)
-                # # Increase asset amount in portfolio
-                # asset = self.portfolio.get(base)
-                # asset.free += o.amount
-                # self.portfolio.set(asset)
             else:  # sell
                 self._execute_sell(
                     base=base,
                     quote=quote,
                     amount=o.amount,
-                    notion=notion,
-                    fee=fee
+                    filled=self._filled_amount(o.amount, MIN_FILL),
+                    price=price,
                 )
-                # # Release reserved base (asset)
-                # # and reduces asset amount in portfolio
-                # self._release(base, o.amount)
-                # asset = self.portfolio.get(base)
-                # asset.free -= o.amount   # subtract sold amount
-                # self.portfolio.set(asset)
-                # # Release reserved fee (quote)
-                # # and increases cash in quote balance
-                # self._release(quote, fee)
-                # cash = self.portfolio.get(quote)
-                # cash.free -= fee
-                # cash.free += notion
-                # self.portfolio.set(cash)
 
-
-            o.status = "closed"; o.filled = o.amount
+            o.status = "closed"
+            o.filled = o.amount
             o.ts_exec = int(time.time()*1000)
             self.order_book.update(o)
 
@@ -296,7 +292,7 @@ class ExchangeEngine:
     # ---------------------- dry-run helper ---------------------------- #
     def can_execute(self, *, symbol: str, side: str,
                     amount: float, price: float | None = None) -> Dict[str, Any]:
-        px = price or self.market.fetch_ticker(symbol)["last"]
+        px = price or self.market.last_price(symbol)
         ok, reason = self._can_execute(symbol, side, amount, px)
         return {"ok": ok, "reason": reason}
     
