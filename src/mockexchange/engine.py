@@ -58,6 +58,49 @@ class ExchangeEngine:
         bal.used -= qty;  bal.free += qty
         self.portfolio.set(bal)
 
+    def _execute_buy(self,
+                     base: str,
+                     quote: str,
+                     amount: float,
+                     notion: float,
+                     fee: float) -> None:
+        """
+        Execute a buy order by:
+        """
+        # Release reserved quote (notion + fee)
+        # and reduces cash from quote balance
+        self._release(quote, notion + fee)
+        cash = self.portfolio.get(quote)
+        cash.free -= (notion + fee)  # deduct fee
+        self.portfolio.set(cash)
+        # Increase asset amount in portfolio
+        asset = self.portfolio.get(base)
+        asset.free += amount
+        self.portfolio.set(asset)
+    
+    def _execute_sell(self,
+                      base: str,
+                      quote: str,
+                      amount: float,
+                      notion: float,
+                      fee: float) -> None:
+        """
+        Execute a sell order by:
+        """
+        # Release reserved base (asset)
+        # and reduces asset amount in portfolio
+        self._release(base, amount)
+        asset = self.portfolio.get(base)
+        asset.free -= amount   # subtract sold amount
+        self.portfolio.set(asset)
+        # Release reserved fee (quote)
+        # and increases cash in quote balance
+        self._release(quote, fee)
+        cash = self.portfolio.get(quote)
+        cash.free -= fee
+        cash.free += notion
+        self.portfolio.set(cash)
+
     # ------------------------------------------------ can-execute ------ #
     def _can_execute(self, symbol: str, side: str,
                      amount: float, px: float) -> Tuple[bool, str | None]:
@@ -130,17 +173,34 @@ class ExchangeEngine:
 
             # --- settle ----------------------------------------------------
             if side == "buy":
-                # release reservation, then final booking
-                self._release(quote, notion + fee)
-                cash  = self.portfolio.get(quote); cash.free -= fee
-                asset = self.portfolio.get(base);  asset.free += amount
-                self.portfolio.set(cash); self.portfolio.set(asset)
+                self._execute_buy(
+                    base=base,
+                    quote=quote,
+                    amount=amount,
+                    notion=notion,
+                    fee=fee
+                )
+                # # release reservation, then final booking
+                # self._release(quote, notion + fee)
+                # cash  = self.portfolio.get(quote)
+                # cash.free -= fee
+                # asset = self.portfolio.get(base)
+                # asset.free += amount
+                # self.portfolio.set(cash)
+                # self.portfolio.set(asset)
             else:  # sell
-                self._release(base, amount)
-                self._release(quote, fee)             # fee leaves ‘used’
-                cash  = self.portfolio.get(quote)
-                cash.free += (notion - fee)
-                self.portfolio.set(cash)
+                self._execute_sell(
+                    base=base,
+                    quote=quote,
+                    amount=amount,
+                    notion=notion,
+                    fee=fee
+                )
+                # self._release(base, amount)
+                # self._release(quote, fee)             # fee leaves ‘used’
+                # cash  = self.portfolio.get(quote)
+                # cash.free += (notion - fee)
+                # self.portfolio.set(cash)
 
             # --- flip order to CLOSED -------------------------------------
             order.status  = "closed"
@@ -170,30 +230,44 @@ class ExchangeEngine:
 
             # release reserved & settle
             if o.side == "buy":
-                # Release reserved quote (notion + fee)
-                # and reduces cash from quote balance
-                self._release(quote, notion + fee)
-                cash = self.portfolio.get(quote)
-                cash.free -= (notion + fee)  # deduct fee
-                self.portfolio.set(cash)
-                # Increase asset amount in portfolio
-                asset = self.portfolio.get(base)
-                asset.free += o.amount
-                self.portfolio.set(asset)
+                self._execute_buy(
+                    base=base,
+                    quote=quote,
+                    amount=o.amount,
+                    notion=notion,
+                    fee=fee
+                )
+                # # Release reserved quote (notion + fee)
+                # # and reduces cash from quote balance
+                # self._release(quote, notion + fee)
+                # cash = self.portfolio.get(quote)
+                # cash.free -= (notion + fee)  # deduct fee
+                # self.portfolio.set(cash)
+                # # Increase asset amount in portfolio
+                # asset = self.portfolio.get(base)
+                # asset.free += o.amount
+                # self.portfolio.set(asset)
             else:  # sell
-                # Release reserved base (asset)
-                # and reduces asset amount in portfolio
-                self._release(base, o.amount)
-                asset = self.portfolio.get(base)
-                asset.free -= o.amount   # subtract sold amount
-                self.portfolio.set(asset)
-                # Release reserved fee (quote)
-                # and increases cash in quote balance
-                self._release(quote, fee)
-                cash = self.portfolio.get(quote)
-                cash.free -= fee
-                cash.free += notion
-                self.portfolio.set(cash)
+                self._execute_sell(
+                    base=base,
+                    quote=quote,
+                    amount=o.amount,
+                    notion=notion,
+                    fee=fee
+                )
+                # # Release reserved base (asset)
+                # # and reduces asset amount in portfolio
+                # self._release(base, o.amount)
+                # asset = self.portfolio.get(base)
+                # asset.free -= o.amount   # subtract sold amount
+                # self.portfolio.set(asset)
+                # # Release reserved fee (quote)
+                # # and increases cash in quote balance
+                # self._release(quote, fee)
+                # cash = self.portfolio.get(quote)
+                # cash.free -= fee
+                # cash.free += notion
+                # self.portfolio.set(cash)
 
 
             o.status = "closed"; o.filled = o.amount
