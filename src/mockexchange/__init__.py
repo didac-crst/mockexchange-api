@@ -1,5 +1,6 @@
 from importlib.metadata import version, PackageNotFoundError
 from .engine import ExchangeEngine
+from .logging_config import logger
 from ._types import OrderSide, OrderType, OrderState, AssetBalance, Order
 
 try:
@@ -14,4 +15,5 @@ __all__ = [
     "OrderState",
     "AssetBalance",
     "Order",
+    "logger",
 ]

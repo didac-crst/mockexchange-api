@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict
 import redis
 
+from .logging_config import logger
+
 @dataclass
 class Market:
     """
@@ -23,7 +25,7 @@ class Market:
     conn: redis.Redis
 
     # Public API ---------------------------------------------------------
-    def fetch_ticker(self, symbol: str) -> Dict[str, Any]:
+    def fetch_ticker(self, symbol: str) -> Dict[str, Any] | None:
         """
         Return a *ccxt-ish* ticker – just the keys our engine needs.
 
@@ -31,23 +33,23 @@ class Market:
         :raises RuntimeError: if mandatory fields cannot be parsed
         """
         h = self.conn.hgetall(f"sym_{symbol}")
-        if not h:  # clean user-facing signal, higher layers can `404`
-            raise ValueError(f"No ticker for {symbol}")
-
+        if not h:
+            return None                            # symbol vanished – treat as absent
         try:
             price = float(h["price"])
-            ts = float(h["timestamp"])
+            ts    = float(h["timestamp"])
         except (KeyError, ValueError):
-            raise RuntimeError(f"Malformed ticker blob for {symbol}: {h!r}")
+            # Just log once and skip this symbol
+            logger.warning("Malformed ticker blob for %s: %s", symbol, h)
+            return None
 
-        # Only **bid/ask** really matter for bots; volumes are extra flair
         return {
             "symbol": symbol,
-            "last": price,
+            "last":   price,
             "timestamp": ts,
-            "bid": float(h.get("bid", price)),
-            "ask": float(h.get("ask", price)),
-            "bid_volume": float(h.get("bid_volume", 0.0)),
-            "ask_volume": float(h.get("ask_volume", 0.0)),
-            "info": h,  # raw payload for debugging
+            "bid":  float(h.get("bid", price)),
+            "ask":  float(h.get("ask", price)),
+            "bid_volume": float(h.get("bidVolume", 0.0)),
+            "ask_volume": float(h.get("askVolume", 0.0)),
+            "info": h,
         }

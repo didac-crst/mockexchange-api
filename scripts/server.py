@@ -21,13 +21,15 @@ POST /admin/reset              wipe balances & orders
 """
 from __future__ import annotations
 
-import os
+import asyncio, os
 from typing import List, Literal
+import time
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from mockexchange.engine import ExchangeEngine
+from mockexchange.logging_config import logger
 
 # ─────────────────────────── Pydantic models ─────────────────────────── #
 
@@ -48,6 +50,8 @@ class FundReq(BaseModel):
 
 
 # ───────────────────── initialise singleton engine ───────────────────── #
+
+REFRESH_S = int(os.getenv("TICK_LOOP_SEC", "10"))
 
 ENGINE = ExchangeEngine(
     redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -75,8 +79,11 @@ def balance():
 
 # Orders ---------------------------------------------------------------- #
 @app.post("/orders")
-def new_order(req: OrderReq):
-    return _try(lambda: ENGINE.create_order(**req.model_dump()))
+async def new_order(req: OrderReq):
+    try:
+        return await ENGINE.create_order_async(**req.model_dump())
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 @app.post("/orders/can_execute")
 def dry_run(req: OrderReq):
@@ -118,3 +125,56 @@ def fund(asset: str, body: FundReq):
 def reset():
     ENGINE.reset()
     return {"status": "ok"}
+
+# ------------------------------------------------------------------------- #
+async def tick_loop() -> None:
+    """
+    Background **coroutine** that keeps the order-book honest.
+
+    Steps performed forever:
+
+    1.  `SCAN` the Valkey/Redis instance for keys that start with
+        ``sym_`` (that’s how prices are stored, e.g. ``sym_BTC/USDT``).
+        The cursor-based iterator is very cheap and non-blocking.
+    2.  For each symbol call :py:meth:`ExchangeEngine.process_price_tick`.
+        The engine will:
+            • Inspect every *OPEN* limit order for *that* symbol.  
+            • If the last traded price crosses the limit, it settles the
+              funds, marks the order *closed* and updates balances.
+    3.  Sleep ``REFRESH_S`` seconds (default **10 s** – configurable via
+        the ``TICK_LOOP_SEC`` env-var) and repeat.
+
+    Notes
+    -----
+    * **Why not Pub/Sub?**  
+      The loop is dead-simple and good enough for an emulator.  
+      When you already publish real-time prices through Redis channels
+      you can swap this loop for a subscriber that calls
+      ``process_price_tick(symbol)`` **only when** a new price arrives.
+    * **Error handling:**  
+      If a key disappears between *scan* and *get*, Valkey raises
+      ``ValueError``.  We swallow it because that race is harmless.
+    """
+    while True:
+        # ❶ Iterate *once* over all known symbols in Valkey
+        for key in ENGINE.redis.scan_iter("sym_*"):
+            symbol = key[4:]                   # strip the 'sym_' prefix
+            try:
+                ENGINE.process_price_tick(symbol)
+            except RuntimeError as exc:
+                logger.warning("ticker-loop skipped %s: %s", symbol, exc)
+
+        # ❷ Park the coroutine; lets FastAPI handle other requests
+        await asyncio.sleep(REFRESH_S)
+
+
+@app.on_event("startup")
+async def _boot_loop() -> None:
+    """
+    FastAPI lifecycle hook.
+
+    At application start-up we *detach* the price-tick coroutine.  The
+    task lives as long as the Uvicorn worker lives and does **not**
+    block the main event-loop.
+    """
+    asyncio.create_task(tick_loop())

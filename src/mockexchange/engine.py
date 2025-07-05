@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import base64, hashlib, itertools, random, time
 from typing import Dict, Any, Tuple, Optional
 import redis
+import asyncio
 from .market import Market
 from .portfolio import Portfolio
 from .orderbook import OrderBook
@@ -34,8 +35,11 @@ class ExchangeEngine:
 
     # id helper -------------------------------------------------------- #
     def _uid(self) -> str:
-        raw = f"{int(time.time()*1000)}_{next(self._oid)}".encode()
-        return base64.urlsafe_b64encode(hashlib.md5(raw).digest())[:12].decode()
+        ts = int(time.time())  # seconds
+        raw = f"{int(ts*1000)}_{next(self._oid)}".encode()
+        hash = base64.urlsafe_b64encode(hashlib.md5(raw).digest())[:6].decode() # Remove padding
+        oid = f"{ts:010d}={hash}"
+        return oid
 
     # ------------------------------------------------ balance helpers -- #
     def _reserve(self, asset: str, qty: float) -> None:
@@ -79,7 +83,7 @@ class ExchangeEngine:
         return {a: b.to_dict() for a, b in self.portfolio.all().items()}
 
     # ----------------------- ORDER CREATION --------------------------- #
-    def create_order(
+    async def create_order_async(
         self, *,
         symbol: str, side: str,
         type: str, amount: float,
@@ -122,7 +126,7 @@ class ExchangeEngine:
 
         # ---------- market ⇒ wait & fill ----------------------------------
         if type == "market":
-            time.sleep(random.uniform(1.0, 2.0))       # dev-only latency
+            await asyncio.sleep(random.uniform(1.0, 5.0))       # dev-only latency
 
             # --- settle ----------------------------------------------------
             if side == "buy":
@@ -150,7 +154,10 @@ class ExchangeEngine:
     # --------------------- LIMIT-FILL TRIGGER ------------------------- #
     def process_price_tick(self, symbol: str) -> None:
         """Call after each price update to check if any OPEN limit hits."""
-        last = self.market.fetch_ticker(symbol)["last"]
+        ticker = self.market.fetch_ticker(symbol)
+        if ticker is None:                  # malformed or missing – just skip
+            return
+        last = ticker["last"]
         for o in self.order_book.list(status="open", symbol=symbol):
             hit = ((o.side == "buy"  and last <= o.price) or
                    (o.side == "sell" and last >= o.price))
