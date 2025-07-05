@@ -104,12 +104,38 @@ def list_orders(
 @app.post("/orders/{oid}/cancel")
 def cancel(oid: str):
     o = ENGINE.order_book.get(oid)
+
     if o.status != "open":
         raise HTTPException(400, "Only *open* orders can be canceled")
+
+    base, quote = o.symbol.split("/")
+
+    # -- Release reserved amounts based on order type and side
+    if o.side == "buy":
+        # release reserved quote (notion + fee)
+        released_base = 0.0
+        released_quote = o.amount * o.price + o.fee_cost
+        ENGINE._release(quote, released_quote)
+
+    else:  # sell
+        # release reserved base (asset) and quote (fee)
+        released_base = o.amount
+        released_quote = o.fee_cost
+        ENGINE._release(base, released_base)
+        ENGINE._release(quote, released_quote)
+
+    # -- Cancel order
     o.status = "canceled"
     o.ts_exec = int(time.time() * 1000)
     ENGINE.order_book.update(o)
-    return o.__dict__
+
+    return {
+        "canceled_order": o.__dict__,
+        "freed": {
+            base: released_base,
+            quote: released_quote,
+        }
+    }
 
 # Balance admin --------------------------------------------------------- #
 @app.post("/balances")
