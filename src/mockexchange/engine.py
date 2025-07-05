@@ -24,8 +24,8 @@ class ExchangeEngine:
     """
 
     redis_url: str
+    commission: float
     cash_asset: str = "USDT"
-    commission: float = 0.00075  # 0.075 %
 
     # boot ------------------------------------------------------------- #
     def __post_init__(self) -> None:
@@ -45,20 +45,27 @@ class ExchangeEngine:
 
     # ------------------------------------------------ balance helpers -- #
     def _reserve(self, asset: str, qty: float) -> None:
-        """Move *qty* from free → used."""
+        """Move *qty* from free → used.
+        No need to return anything as it will always be qty or error.
+        """
         bal = self.portfolio.get(asset)
         if bal.free < qty:
             raise ValueError(f"insufficient {asset} to reserve")
-        bal.free -= qty;  bal.used += qty
+        bal.free -= qty
+        bal.used += qty
         self.portfolio.set(bal)
 
-    def _release(self, asset: str, qty: float) -> None:
-        """Move *qty* from used → free (called on cancel / fill)."""
+    def _release(self, asset: str, qty: float) -> float:
+        """Move *qty* from used → free (called on cancel / fill).
+        Returns the actual amount released, which may be less than requested.
+        """
         bal = self.portfolio.get(asset)
         if bal.used < qty:                         # sanity
             qty = bal.used
-        bal.used -= qty;  bal.free += qty
+        bal.used -= qty
+        bal.free += qty
         self.portfolio.set(bal)
+        return qty
 
     def _get_booked_real_amounts(self, amount: float, filled: float, price: float) -> Dict[str, float]:
         """ Calculate booked and real amounts for an order. """

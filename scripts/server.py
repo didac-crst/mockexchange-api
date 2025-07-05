@@ -55,6 +55,7 @@ REFRESH_S = int(os.getenv("TICK_LOOP_SEC", "10"))
 
 ENGINE = ExchangeEngine(
     redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    commission= float(os.getenv("COMMISSION", "0.001")),  # 0.1% default
 )
 
 # ───────────────────────────── FastAPI app ───────────────────────────── #
