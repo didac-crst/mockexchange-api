@@ -151,13 +151,13 @@ class ExchangeEngine:
 
     # ------------------------------------------------ can-execute ------ #
     @property
-    def symbols(self) -> list[str]:
+    def tickers(self) -> list[str]:
         """
-        Return a list of all known symbols.
+        Return a list of all known tickers.
 
         This is a list of strings, e.g. ``["BTC/USDT", "ETH/USDT"]``.
         """
-        return self.market.symbols
+        return self.market.tickers
 
     def _can_execute(self, symbol: str, side: str,
                      amount: float, px: float) -> Tuple[bool, str | None]:
@@ -176,11 +176,14 @@ class ExchangeEngine:
         return True, None
 
     # ------------------------------------------------ public API ------- #
-    def fetch_ticker(self, symbol: str) -> Dict[str, Any]:
-        ticker = self.market.fetch_ticker(symbol)
-        if ticker is None:
-            raise ValueError(f"Ticker for {symbol} not available")
-        return ticker
+    def fetch_ticker(self, ticker: str) -> Dict[str, Any]:
+        """
+        Fetch ticker information from the market.
+        """
+        ticker_info = self.market.fetch_ticker(ticker)
+        if ticker_info is None:
+            raise ValueError(f"Ticker for {ticker} not available")
+        return ticker_info
 
     def fetch_balance(self, asset: Optional[str] = None) -> Dict[str, Any]:
         all_balances = {a: b.to_dict() for a, b in self.portfolio.all().items()}

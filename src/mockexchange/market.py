@@ -26,33 +26,33 @@ class Market:
 
     # Public API ---------------------------------------------------------
     @property
-    def symbols(self) -> list[str]:
+    def tickers(self) -> list[str]:
         """
-        Return a list of all known symbols.
+        Return a list of all known tickers.
 
         This is a list of strings, e.g. ``["BTC/USDT", "ETH/USDT"]``.
         """
         return [k[4:] for k in self.conn.scan_iter("sym_*")]
 
-    def fetch_ticker(self, symbol: str) -> Dict[str, Any] | None:
+    def fetch_ticker(self, ticker: str) -> Dict[str, Any] | None:
         """
         Return a *ccxt-ish* ticker – just the keys our engine needs.
 
         :raises ValueError: if the hash is missing
         :raises RuntimeError: if mandatory fields cannot be parsed
         """
-        h = self.conn.hgetall(f"sym_{symbol}")
+        h = self.conn.hgetall(f"sym_{ticker}")
         if not h:
-            return None                            # symbol vanished – treat as absent
+            return None                            # ticker vanished – treat as absent
         try:
             price = float(h["price"])
             ts    = float(h["timestamp"])
         except (KeyError, ValueError):
-            # Just log once and skip this symbol
-            logger.warning("Malformed ticker blob for %s: %s", symbol, h)
+            # Just log once and skip this ticker
+            logger.warning("Malformed ticker blob for %s: %s", ticker, h)
             return None
         return {
-            "symbol": symbol,
+            "symbol": ticker,
             "last":   price,
             "timestamp": ts,
             "bid":  float(h.get("bid", price)),

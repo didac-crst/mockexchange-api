@@ -95,17 +95,21 @@ def root() -> dict:
 
 # Market endpoints ------------------------------------------------------ #
 @app.get("/tickers", tags=["Market"])
-def symbols() -> List[str]:
+def all_tickers() -> List[str]:
     """
-    List all known symbols.
+    List all known tickers.
 
     Returns a list of strings, e.g. ``["BTC/USDT", "ETH/USDT"]``.
     """
-    return ENGINE.symbols
+    return ENGINE.tickers
 
-@app.get("/tickers/{symbol}", tags=["Market"])
-def ticker(symbol: str):
-    return _try(lambda: ENGINE.fetch_ticker(symbol))
+@app.get("/tickers/{ticker}", tags=["Market"])
+def ticker(ticker: str = "BTC/USDT"):
+    """ Get a single ticker.
+
+    :param ticker: Symbol, e.g. BTC/USDT, ETH/USDT.
+    """
+    return _try(lambda: ENGINE.fetch_ticker(ticker))
 
 # Balance endpoints --------------------------------------------------- #
 @app.get("/balance", tags=["Portfolio"])
