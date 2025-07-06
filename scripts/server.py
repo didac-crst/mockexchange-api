@@ -53,12 +53,14 @@ class FundReq(BaseModel):
 # ───────────────────── initialise singleton engine ───────────────────── #
 
 REFRESH_S = int(os.getenv("TICK_LOOP_SEC", "10"))
-DISPLAY_DOCS = os.getenv("DISPLAY_DOCS", "True").lower() in ("true", "1", "yes")
+TEST_ENV = os.getenv("TEST_ENV", "FALSE").lower() in ("1", "true", "yes")
 API_KEY = os.getenv("API_KEY", "invalid-key")  # default is invalid key
 
 async def verify_key(x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=403, detail="Invalid API Key")
+
+prod_depends = [Depends(verify_key)] if not TEST_ENV else []
 
 ENGINE = ExchangeEngine(
     redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
@@ -73,7 +75,7 @@ app = FastAPI(title="MockExchange API",
                 swagger_ui_parameters={
                     "tryItOutEnabled": True,  # enable "Try it out" button
                 },
-                docs_url="/docs" if DISPLAY_DOCS else None,
+                docs_url="/docs" if TEST_ENV else None,  # disable in production
             )
 
 # Helpers: wrap calls so every endpoint is ≤ 3 lines -------------------- #
@@ -119,7 +121,7 @@ def list_orders(
 ):
     return [o.__dict__ for o in ENGINE.order_book.list(status=status, symbol=symbol)]
 
-@app.post("/orders", tags=["Orders"], dependencies=[Depends(verify_key)])
+@app.post("/orders", tags=["Orders"], dependencies=prod_depends)
 async def new_order(req: OrderReq):
     try:
         return await ENGINE.create_order_async(**req.model_dump())
@@ -133,7 +135,7 @@ def dry_run(req: OrderReq):
         symbol=req.symbol, side=req.side, amount=req.amount, price=req.price
     )
 
-@app.post("/orders/cancel/{oid}", tags=["Orders"], dependencies=[Depends(verify_key)])
+@app.post("/orders/cancel/{oid}", tags=["Orders"], dependencies=prod_depends)
 def cancel(oid: str):
     o = ENGINE.order_book.get(oid)
 
@@ -170,15 +172,15 @@ def cancel(oid: str):
     }
 
 # Balance admin --------------------------------------------------------- #
-@app.post("/admin/edit_balance", tags=["Admin"], dependencies=[Depends(verify_key)])
+@app.post("/admin/edit_balance", tags=["Admin"], dependencies=prod_depends)
 def set_balance(req: BalanceReq):
     return _try(lambda: ENGINE.set_balance(req.asset, free=req.free, used=req.used))
 
-@app.post("/admin/fund/{asset}", tags=["Admin"], dependencies=[Depends(verify_key)])
+@app.post("/admin/fund/{asset}", tags=["Admin"], dependencies=prod_depends)
 def fund(asset: str, body: FundReq):
     return _try(lambda: ENGINE.fund_asset(asset, body.amount))
 
-@app.post("/admin/reset", tags=["Admin"], dependencies=[Depends(verify_key)])
+@app.post("/admin/reset", tags=["Admin"], dependencies=prod_depends)
 def reset():
     ENGINE.reset()
     return {"status": "ok"}
