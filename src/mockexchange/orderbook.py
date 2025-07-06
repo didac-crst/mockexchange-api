@@ -35,6 +35,7 @@ class OrderBook:
         *,
         status: str | None = None,
         symbol: str | None = None,
+        tail: int | None = None
     ) -> List[Order]:
         """
         In-memory filter because the hash is tiny (<<10k records) in tests.
@@ -51,6 +52,10 @@ class OrderBook:
                 continue
             out.append(o)
         out.sort(key=lambda o: o.ts_post)  # sort by timestamp
+        if tail is not None:
+            out = out[-tail:]
+        if not out:
+            return []
         return out
 
     def clear(self) -> None:

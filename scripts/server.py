@@ -47,6 +47,7 @@ class BalanceReq(BaseModel):
     used:  float = Field(0.0, ge=0)
 
 class FundReq(BaseModel):
+    asset: str = "USDT"
     amount: float = Field(1.0, gt=0)
 
 
@@ -123,8 +124,11 @@ def list_orders(
         None, description="Filter by order status"
     ),
     symbol: str | None = Query(None, description="BTC/USDT etc."),
+    tail: int | None = Query(
+        None, description="Number of orders to return"
+    ),
 ):
-    return [o.__dict__ for o in ENGINE.order_book.list(status=status, symbol=symbol)]
+    return [o.__dict__ for o in ENGINE.order_book.list(status=status, symbol=symbol, tail=tail)]
 
 @app.post("/orders", tags=["Orders"], dependencies=prod_depends)
 async def new_order(req: OrderReq):
@@ -140,8 +144,11 @@ def dry_run(req: OrderReq):
         symbol=req.symbol, side=req.side, amount=req.amount, price=req.price
     )
 
-@app.post("/orders/cancel/{oid}", tags=["Orders"], dependencies=prod_depends)
-def cancel(oid: str):
+@app.post("/orders/cancel", tags=["Orders"], dependencies=prod_depends)
+def cancel(
+    oid: str = Query(..., description="Order ID to cancel")
+):
+    """Cancel an *open* order by its ID."""
     o = ENGINE.order_book.get(oid)
 
     if o.status != "open":
@@ -181,14 +188,14 @@ def cancel(oid: str):
 def set_balance(req: BalanceReq):
     return _try(lambda: ENGINE.set_balance(req.asset, free=req.free, used=req.used))
 
-@app.post("/admin/fund/{asset}", tags=["Admin"], dependencies=prod_depends)
-def fund(asset: str, body: FundReq):
-    return _try(lambda: ENGINE.fund_asset(asset, body.amount))
+@app.post("/admin/fund", tags=["Admin"], dependencies=prod_depends)
+def fund(body: FundReq):
+    return _try(lambda: ENGINE.fund_asset(body.asset, body.amount))
 
 @app.post("/admin/reset", tags=["Admin"], dependencies=prod_depends)
 def reset():
     ENGINE.reset()
-    return {"status": "ok"}
+    return {"status": "ok", "message": "All balances and orders have been reset."}
 
 # ------------------------------------------------------------------------- #
 async def tick_loop() -> None:
