@@ -26,6 +26,7 @@ from typing import List, Literal
 import time
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from mockexchange.engine import ExchangeEngine
@@ -60,7 +61,14 @@ ENGINE = ExchangeEngine(
 
 # ───────────────────────────── FastAPI app ───────────────────────────── #
 
-app = FastAPI(title="MockExchange API", version="0.2")
+app = FastAPI(title="MockExchange API",
+                version="0.2",
+                description="A mock exchange API for testing purposes",
+                swagger_ui_parameters={
+                    "tryItOutEnabled": True,  # enable "Try it out" button
+                },
+                docs_url="/docs",
+            )
 
 # Helpers: wrap calls so every endpoint is ≤ 3 lines -------------------- #
 def _try(fn):
@@ -72,14 +80,9 @@ def _try(fn):
 # ─────────────────────────────── Endpoints ───────────────────────────── #
 
 # Default root endpoint --------------------------------------------- #
-@app.get("/", tags=["Root"])
+@app.get("/", include_in_schema=False)
 def root() -> dict:
-    return {"name": "MockExchange API",
-            "description": "A mock exchange API for testing purposes",
-            "docs": "/docs",
-            "version": app.version,
-            "engine": ENGINE.__class__.__name__
-            }
+    return RedirectResponse(url="/docs")
 
 # Market endpoints ------------------------------------------------------ #
 @app.get("/symbols", tags=["Market"])

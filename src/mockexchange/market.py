@@ -25,6 +25,15 @@ class Market:
     conn: redis.Redis
 
     # Public API ---------------------------------------------------------
+    @property
+    def symbols(self) -> list[str]:
+        """
+        Return a list of all known symbols.
+
+        This is a list of strings, e.g. ``["BTC/USDT", "ETH/USDT"]``.
+        """
+        return [k[4:] for k in self.conn.scan_iter("sym_*")]
+
     def fetch_ticker(self, symbol: str) -> Dict[str, Any] | None:
         """
         Return a *ccxt-ish* ticker – just the keys our engine needs.

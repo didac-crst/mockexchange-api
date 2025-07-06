@@ -150,6 +150,15 @@ class ExchangeEngine:
         return amount * random.uniform(min_fill, 1.0)
 
     # ------------------------------------------------ can-execute ------ #
+    @property
+    def symbols(self) -> list[str]:
+        """
+        Return a list of all known symbols.
+
+        This is a list of strings, e.g. ``["BTC/USDT", "ETH/USDT"]``.
+        """
+        return self.market.symbols
+
     def _can_execute(self, symbol: str, side: str,
                      amount: float, px: float) -> Tuple[bool, str | None]:
         base, quote = symbol.split("/")
