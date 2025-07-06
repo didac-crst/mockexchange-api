@@ -90,14 +90,6 @@ class FundReq(BaseModel):
 class ModifyTickerReq(BaseModel):
     symbol: str = "BTC/USDT"
     price:  float = Field(..., gt=0.0, description="New price for the ticker")
-    bid: float | None = Field(
-        None,
-        description="Optional bid price; if not provided, it will be set to the same value as `price`"
-    )
-    ask: float | None = Field(
-        None,
-        description="Optional ask price; if not provided, it will be set to the same value as `price`"
-    )
     bid_volume: float = Field(
         None,
         description="Optional volume at the bid price; if not provided"
@@ -258,7 +250,11 @@ def modify_ticker(body: ModifyTickerReq):
     Set or modify a ticker's data.
     """
     ts = time.time() / 1000  # current time in seconds since epoch
-    ticker_data = _try(lambda: ENGINE.set_ticker(body.symbol, body.price, ts, body.bid, body.ask, body.bid_volume, body.ask_volume))
+    price = body.price
+    delta = price * 0.0001  # 0.01% of the price
+    bid = price - delta
+    ask = price + delta
+    ticker_data = _try(lambda: ENGINE.set_ticker(body.symbol, price, ts, bid, ask, body.bid_volume, body.ask_volume))
     symbol = ticker_data['symbol']
     try:
         ENGINE.process_price_tick(symbol)
