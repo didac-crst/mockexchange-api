@@ -164,11 +164,11 @@ def cancel(oid: str):
     }
 
 # Balance admin --------------------------------------------------------- #
-@app.post("/balances", tags=["Admin"])
+@app.post("/admin/edit_balance", tags=["Admin"])
 def set_balance(req: BalanceReq):
     return _try(lambda: ENGINE.set_balance(req.asset, free=req.free, used=req.used))
 
-@app.post("/balances/{asset}/fund", tags=["Admin"])
+@app.post("/admin/fund/{asset}", tags=["Admin"])
 def fund(asset: str, body: FundReq):
     return _try(lambda: ENGINE.fund_asset(asset, body.amount))
 
