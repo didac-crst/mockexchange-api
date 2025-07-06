@@ -331,6 +331,17 @@ class ExchangeEngine:
     def reset(self) -> None:
         self.portfolio.clear(); self.order_book.clear()
         self._oid = itertools.count(1)
+    
+    def set_ticker(self, symbol: str, price: float, ts: float | None = None,
+                      bid: float | None = None, ask: float | None = None,
+                      bid_volume: float | None = None, ask_volume: float | None = None) -> Dict[str, Any]:
+        """
+        Modify the last price of a ticker.
+        """
+        if symbol not in self.market.tickers:
+            raise ValueError(f"Ticker {symbol} does not exist")
+        self.market.set_last_price(symbol, price, ts, bid, ask, bid_volume, ask_volume)
+        return self.fetch_ticker(symbol)
 
     # ---------------------- dry-run helper ---------------------------- #
     def can_execute(self, *, symbol: str, side: str,

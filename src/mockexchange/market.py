@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict
 import redis
+import time
 
 from .logging_config import logger
 
@@ -72,3 +73,38 @@ class Market:
         if ticker is None:
             raise RuntimeError(f"Ticker for {symbol} not available")
         return ticker["last"]
+    
+    def set_last_price(self, symbol: str, price: float, ts: float | None = None, bid: float | None = None, ask: float | None = None,
+                       bid_volume: float | None = None, ask_volume: float | None = None) -> None:
+        """
+        Set the last price of the ticker.
+
+        :param symbol: The ticker symbol, e.g. "BTC/USDT".
+        :param price: The last price to set.
+        :param ts: Optional timestamp in seconds since epoch; if not provided, current time is used.
+        :param bid: Optional bid price; if not provided, it will be set to the same value as `price`.
+        :param ask: Optional ask price; if not provided, it will be set to the same value as `price`.
+        :param bid_volume: Optional bid volume; if not provided, it defaults to 0.0.
+        :param ask_volume: Optional ask volume; if not provided, it defaults to 0.0.
+
+        This method is only for testing purposes and should not be used in production.
+        """
+        if ts is None:
+            ts = time.time() / 1000  # current time in seconds since epoch
+        if bid is None:
+            bid = price
+        if ask is None:
+            ask = price
+        if bid_volume is None:
+            bid_volume = 0.0
+        if ask_volume is None:
+            ask_volume = 0.0
+        self.conn.hmset(f"sym_{symbol}", {
+            "symbol": symbol,
+            "price": price,
+            "timestamp": ts,
+            "bid": bid,
+            "ask": ask,
+            "bidVolume": bid_volume,
+            "askVolume": ask_volume,
+        }) 

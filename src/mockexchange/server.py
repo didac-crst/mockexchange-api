@@ -87,6 +87,25 @@ class FundReq(BaseModel):
     asset: str = "USDT"
     amount: float = Field(100000.0, gt=0)
 
+class ModifyTickerReq(BaseModel):
+    symbol: str = "BTC/USDT"
+    price:  float = Field(..., gt=0.0, description="New price for the ticker")
+    bid: float | None = Field(
+        None,
+        description="Optional bid price; if not provided, it will be set to the same value as `price`"
+    )
+    ask: float | None = Field(
+        None,
+        description="Optional ask price; if not provided, it will be set to the same value as `price`"
+    )
+    bid_volume: float = Field(
+        None,
+        description="Optional volume at the bid price; if not provided"
+    )
+    ask_volume: float = Field(
+        None,
+        description="Optional volume at the ask price; if not provided"
+    )
 
 # ───────────────────── initialise singleton engine ───────────────────── #
 
@@ -233,6 +252,11 @@ def cancel(
     }
 
 # Balance admin --------------------------------------------------------- #
+@app.post("/admin/set_ticker", tags=["Admin"], dependencies=prod_depends)
+def modify_ticker(body: ModifyTickerReq):
+    ts = time.time() / 1000  # current time in seconds since epoch
+    return _try(lambda: ENGINE.set_ticker(body.symbol, body.price, ts, body.bid, body.ask, body.bid_volume, body.ask_volume))
+
 @app.post("/admin/edit_balance", tags=["Admin"], dependencies=prod_depends)
 def set_balance(req: BalanceReq):
     return _try(lambda: ENGINE.set_balance(req.asset, free=req.free, used=req.used))
