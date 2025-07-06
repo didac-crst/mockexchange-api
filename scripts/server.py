@@ -94,7 +94,7 @@ def root() -> dict:
     return RedirectResponse(url="/docs")
 
 # Market endpoints ------------------------------------------------------ #
-@app.get("/symbols", tags=["Market"])
+@app.get("/tickers", tags=["Market"])
 def symbols() -> List[str]:
     """
     List all known symbols.
@@ -103,19 +103,23 @@ def symbols() -> List[str]:
     """
     return ENGINE.symbols
 
-@app.get("/ticker", tags=["Market"])
-def ticker(
-    symbol: str = Query(
-        ...,                     # “...”  = required
-        description="Symbol to fetch, e.g. BTC/USDT"
-    )
-):
+@app.get("/tickers/{symbol}", tags=["Market"])
+def ticker(symbol: str):
     return _try(lambda: ENGINE.fetch_ticker(symbol))
 
 # Balance endpoints --------------------------------------------------- #
 @app.get("/balance", tags=["Portfolio"])
 def balance():
     return ENGINE.fetch_balance()
+
+@app.get("/balance/{asset}", tags=["Portfolio"])
+def asset_balance(asset: str):
+    """
+    Get the balance of a specific asset.
+
+    :param asset: Asset symbol, e.g. BTC, USDT.
+    """
+    return _try(lambda: ENGINE.fetch_balance(asset))
 
 # Orders ---------------------------------------------------------------- #
 @app.get("/orders", tags=["Orders"])
@@ -148,9 +152,9 @@ def dry_run(req: OrderReq):
         symbol=req.symbol, side=req.side, amount=req.amount, price=req.price
     )
 
-@app.post("/orders/cancel", tags=["Orders"], dependencies=prod_depends)
+@app.post("/orders/{oid}/cancel", tags=["Orders"], dependencies=prod_depends)
 def cancel(
-    oid: str = Query(..., description="Order ID to cancel")
+    oid: str,
 ):
     """Cancel an *open* order by its ID."""
     o = ENGINE.order_book.get(oid)

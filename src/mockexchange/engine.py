@@ -182,8 +182,12 @@ class ExchangeEngine:
             raise ValueError(f"Ticker for {symbol} not available")
         return ticker
 
-    def fetch_balance(self) -> Dict[str, Any]:
-        return {a: b.to_dict() for a, b in self.portfolio.all().items()}
+    def fetch_balance(self, asset: Optional[str] = None) -> Dict[str, Any]:
+        all_balances = {a: b.to_dict() for a, b in self.portfolio.all().items()}
+        if asset:
+            return all_balances.get(asset, {})
+        else:
+            return all_balances
 
     # ----------------------- ORDER CREATION --------------------------- #
     async def create_order_async(
