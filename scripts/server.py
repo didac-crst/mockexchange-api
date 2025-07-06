@@ -102,9 +102,12 @@ def symbols() -> List[str]:
     """
     return ENGINE.symbols
 
-@app.get("/ticker/{symbol:path}", tags=["Market"])
-def ticker(symbol: str):
-    return _try(lambda: ENGINE.fetch_ticker(symbol))
+@app.get("/ticker", tags=["Market"])
+def ticker(symbol: str = Query(..., description="Symbol to fetch, e.g. BTC/USDT")):
+    """
+    Fetch the latest ticker information for a specific symbol.
+    """
+    return _try(lambda: ENGINE.fetch_ticker({"symbol": symbol}))
 
 # Balance endpoints --------------------------------------------------- #
 @app.get("/balance", tags=["Portfolio"])
