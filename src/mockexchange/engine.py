@@ -298,7 +298,7 @@ class ExchangeEngine:
         o.ts_exec = int(time.time() * 1000)
         self.order_book.update(o)
         return {
-            "canceled_order": o.as_dict(),
+            "canceled_order": o.__dict__,
             "freed": {base: released_base, quote: released_quote},
         }
 

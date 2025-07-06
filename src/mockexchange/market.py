@@ -99,7 +99,7 @@ class Market:
             bid_volume = 0.0
         if ask_volume is None:
             ask_volume = 0.0
-        self.conn.hmset(f"sym_{symbol}", {
+        fields = {
             "symbol": symbol,
             "price": price,
             "timestamp": ts,
@@ -107,4 +107,9 @@ class Market:
             "ask": ask,
             "bidVolume": bid_volume,
             "askVolume": ask_volume,
-        }) 
+        }
+
+        # Redis won’t store None, so drop them first.
+        clean = {k: v for k, v in fields.items() if v is not None}
+
+        self.conn.hset(f"sym_{symbol}", mapping=clean)
