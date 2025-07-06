@@ -2,15 +2,23 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# copy project
-COPY pyproject.toml README.md .
-COPY src ./src
+# --- install Poetry -------------------------------------------------
+RUN pip install --no-cache-dir poetry==1.8.2           # or any pinned version
 
+# --- copy dependency spec first (better layer-caching) -------------
 COPY pyproject.toml poetry.lock ./
+
+# install runtime deps only
 RUN poetry install --no-root --only main
 
-# install project so 'mockexchange' is on site-packages
+# --- copy the actual source code -----------------------------------
+COPY src ./src
+RUN ls -l ./src
+# (optional) copy anything else you need at runtime
+# COPY scripts ./scripts
+
+# make the package importable for uvicorn
 RUN python -m pip install --no-cache-dir --editable .
 
 EXPOSE 8000
-CMD ["uvicorn", "scripts.server:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "mockexchange_api.server:app", "--host", "0.0.0.0", "--port", "8000"]
