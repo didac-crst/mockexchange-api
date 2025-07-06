@@ -35,20 +35,20 @@ from mockexchange.logging_config import logger
 # ─────────────────────────── Pydantic models ─────────────────────────── #
 
 class OrderReq(BaseModel):
-    symbol: str
+    symbol: str = "BTC/USDT"
     side:   Literal["buy", "sell"]
     type:   Literal["market", "limit"] = "market"
     amount: float
     price:  float | None = None      # only for limit orders
 
 class BalanceReq(BaseModel):
-    asset: str = "USDT"
-    free:  float = Field(100000.0, ge=0)
+    asset: str = "BTC"
+    free:  float = Field(1.0, ge=0)
     used:  float = Field(0.0, ge=0)
 
 class FundReq(BaseModel):
     asset: str = "USDT"
-    amount: float = Field(1.0, gt=0)
+    amount: float = Field(100000.0, gt=0)
 
 
 # ───────────────────── initialise singleton engine ───────────────────── #
@@ -129,6 +129,10 @@ def list_orders(
     ),
 ):
     return [o.__dict__ for o in ENGINE.order_book.list(status=status, symbol=symbol, tail=tail)]
+
+@app.get("/orders/{oid}", tags=["Orders"])
+def get_order(oid: str):
+    return _try(lambda: ENGINE.order_book.get(oid))
 
 @app.post("/orders", tags=["Orders"], dependencies=prod_depends)
 async def new_order(req: OrderReq):
