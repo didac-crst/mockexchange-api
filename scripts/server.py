@@ -109,7 +109,7 @@ def ticker(
         description="Symbol to fetch, e.g. BTC/USDT"
     )
 ):
-    return _try(lambda: ENGINE.fetch_ticker({"symbol": symbol}))
+    return _try(lambda: ENGINE.fetch_ticker(symbol))
 
 # Balance endpoints --------------------------------------------------- #
 @app.get("/balance", tags=["Portfolio"])
