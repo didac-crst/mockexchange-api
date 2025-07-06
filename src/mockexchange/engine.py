@@ -269,6 +269,40 @@ class ExchangeEngine:
         # ---------- limit ⇒ nothing else (stays OPEN) ---------------------
         return order.__dict__
 
+
+    def cancel_order(self, oid: str) -> dict:
+        """Cancel an *open* order and release reserved funds."""
+        o = self.order_book.get(oid)
+
+        if o.status != "open":
+            raise ValueError("Only *open* orders can be canceled")
+
+        base, quote = o.symbol.split("/")
+
+        # -- Release reserved amounts based on order type and side
+        if o.side == "buy":
+            # release reserved quote (notion + fee)
+            released_base = 0.0
+            released_quote = o.amount * o.price + o.fee_cost
+            self._release(quote, released_quote)
+
+        else:  # sell
+            # release reserved base (asset) and quote (fee)
+            released_base = o.amount
+            released_quote = o.fee_cost
+            self._release(base, released_base)
+            self._release(quote, released_quote)
+
+        # -- Cancel order
+        o.status = "canceled"
+        o.ts_exec = int(time.time() * 1000)
+        self.order_book.update(o)
+        return {
+            "canceled_order": o.as_dict(),
+            "freed": {base: released_base, quote: released_quote},
+        }
+
+
     # --------------------- LIMIT-FILL TRIGGER ------------------------- #
     def process_price_tick(self, symbol: str) -> None:
         """Call after each price update to check if any OPEN limit hits."""

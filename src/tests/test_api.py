@@ -1,128 +1,184 @@
+"""
+High-level black-box tests for the MockExchange FastAPI service.
+
+Every test talks to the HTTP surface only – no direct engine calls.
+The suite is designed to run with ``TEST_ENV=true`` so that authentication
+is disabled and the interactive docs are exposed.
+"""
+
+from __future__ import annotations
+
 import os
 import time
+from typing import Any, Dict, List
+
 import pytest
 from fastapi.testclient import TestClient
 
-# ---------------------------------------------------------------------------
-# Test fixture: create a TestClient with TEST_ENV=true so docs & endpoints are
-# exposed without API‑Key authentication.  Each test starts with a *clean*
-# engine thanks to the POST /admin/reset call in the session‑scoped fixture.
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------
+# One global TestClient
+# ---------------------------------------------------------------------
 
-os.environ.setdefault("TEST_ENV", "true")   # disable x-api-key
-url_api = os.getenv("URL_API", "http://localhost:8000/")  # default to local dev server
+os.environ.setdefault("TEST_ENV", "true")          # disable x-api-key auth
+BASE_URL = os.getenv("URL_API", "http://localhost:8000/")
 
-from mockexchange.server import app  # noqa: E402 after env var is set
+from mockexchange_api.server import app  # noqa: E402 (import after env var)
 
-_client = TestClient(app, base_url=url_api)
+_client = TestClient(app, base_url=BASE_URL)
+
 
 @pytest.fixture(scope="session")
-def client() -> TestClient:  # pylint: disable=redefined-outer-name
-    """FastAPI TestClient shared by all tests."""
-    # ensure a pristine state for the whole suite
-    _client.post("/admin/reset")
+def client() -> TestClient:
+    """
+    Shared TestClient for the whole test session.
+
+    Starts each run from a pristine engine via DELETE /admin/data.
+    """
+    _client.delete("/admin/data")
     yield _client
 
-# ---------------------------------------------------------------------------
-# 1)  Portfolio lifecycle: reset → fund → edit → verify
-# ---------------------------------------------------------------------------
 
-def test_portfolio_lifecycle(client: TestClient):
-    """end‑to‑end sanity check on balance admin endpoints."""
-    # 1‑a  reset portfolio
-    r = client.post("/admin/reset")
-    assert r.status_code == 200
+# ---------------------------------------------------------------------
+# Helper utilities
+# ---------------------------------------------------------------------
 
-    # 1‑b  portfolio & order‑book must be empty
-    assert client.get("/balance").json() == {}
-    assert client.get("/orders").json() == []
+def reset_and_fund(client: TestClient, amount: float = 100_000) -> None:
+    """Hard reset + preload USDT balance."""
+    assert client.delete("/admin/data").status_code == 200
+    assert client.post("/admin/fund",
+                       json={"asset": "USDT", "amount": amount}).status_code == 200
 
-    # 1‑c  add funds (USDT)
-    body = {"asset": "USDT", "amount": 10_000}
-    r = client.post("/admin/fund", json=body)
-    assert r.status_code == 200
 
-    # 1‑d  edit balance row (change free / used)
-    body = {"asset": "USDT", "free": 8_000, "used": 2_000}
-    r = client.post("/admin/edit_balance", json=body)
-    assert r.status_code == 200
+def patch_ticker_price(client: TestClient, symbol: str, price: float) -> None:
+    """
+    Hit **PATCH /admin/tickers/{symbol}/price** – idempotent price mutation.
+    """
+    path = f"/admin/tickers/{symbol}/price"
+    assert client.patch(path, json={"price": price}).status_code == 200
 
-    # 1‑e  final balance must match exactly
-    expected = {"asset": "USDT", "free": 8_000, "used": 2_000, 'total': 10000.0}
-    r = client.get("/balance/USDT").json()
-    assert r == expected
 
-# ---------------------------------------------------------------------------
-# 2)  Market data: list tickers & fetch single ticker
-# ---------------------------------------------------------------------------
+def assert_no_locked_funds(client: TestClient, eps: float = 1e-8) -> None:
+    """Fail if any asset keeps more than *eps* in `used`."""
+    for asset, row in client.get("/balance").json().items():
+        assert row["used"] < eps, f"{asset} still locked: {row}"
 
-def test_tickers_endpoints(client: TestClient):
-    ticker_list = client.get("/tickers").json()
-    assert isinstance(ticker_list, list) and ticker_list, "empty tickers list"  # non‑empty
 
-    # pick a random symbol from the list and fetch its ticker
-    symbol = ticker_list[0]
-    r = client.get(f"/tickers/{symbol}")
-    assert r.status_code == 200 and r.json().get("symbol") == symbol
-
-# ---------------------------------------------------------------------------
-# 3)  Market orders: buy → sell → buy → sell
-# ---------------------------------------------------------------------------
-
-def test_market_order_flow(client: TestClient):
-    client.post("/admin/reset")
-    client.post("/admin/fund", json={"asset": "USDT", "amount": 100_000})
-
-    def _mk(side: str):
-        body = {"symbol": "BTC/USDT", "side": side, "type": "market", "amount": 0.01}
-        return client.post("/orders", json=body)
-
-    # buy, sell, buy, sell
-    for side in ("buy", "sell", "buy", "sell"):
-        r = _mk(side)
+def place_orders(client: TestClient, payloads: List[Dict[str, Any]]) -> List[str]:
+    """POST /orders for each payload; return their IDs."""
+    ids: List[str] = []
+    for body in payloads:
+        r = client.post("/orders", json=body)
         assert r.status_code == 200
+        ids.append(r.json()["id"])
+    return ids
+
+
+# ---------------------------------------------------------------------
+# 1) Portfolio lifecycle
+# ---------------------------------------------------------------------
+
+def test_portfolio_lifecycle(client: TestClient) -> None:
+    """reset → fund → patch balance → verify exact row."""
+    reset_and_fund(client, 10_000)
+
+    # Patch single row (idempotent)
+    body = {"asset": "USDT", "free": 8_000, "used": 2_000}
+    assert client.patch("/admin/balance", json=body).status_code == 200
+
+    expected = {"free": 8_000, "used": 2_000}
+    assert client.get("/balance/USDT").json() == expected
+
+
+# ---------------------------------------------------------------------
+# 2) Market-data surface
+# ---------------------------------------------------------------------
+
+def test_ticker_listing_and_mutation(client: TestClient) -> None:
+    """
+    * `/tickers` returns a non-empty list  
+    * `/tickers/{sym}` echoes the symbol  
+    * Price mutation via `PATCH /admin/tickers/{sym}/price` propagates
+    """
+    symbols = client.get("/tickers").json()
+    assert symbols, "exchange returned empty ticker list"
+
+    sym = symbols[0]
+    tick0 = client.get(f"/tickers/{sym}").json()
+
+    new_px = tick0["last"] * 1.10
+    patch_ticker_price(client, sym, new_px)
+
+    tick1 = client.get(f"/tickers/{sym}").json()
+    assert abs(tick1["last"] - new_px) < 1e-8
+
+
+# ---------------------------------------------------------------------
+# 3) Market orders: buy → sell → buy → sell
+# ---------------------------------------------------------------------
+
+def test_market_order_flow(client: TestClient) -> None:
+    """Round-trip of four *market* orders; no USDT left in `used`."""
+    reset_and_fund(client)
+
+    sym, amt = "BTC/USDT", 0.01
+    txs = [
+        {"side": "buy",  "price": 50_000},
+        {"side": "sell", "price": 80_000},
+        {"side": "buy",  "price": 75_000},
+        {"side": "sell", "price": 100_000},
+    ]
+
+    for tx in txs:
+        tx.update(symbol=sym, type="market", amount=amt)
+        place_orders(client, [tx])
+        time.sleep(0.5)
+        patch_ticker_price(client, sym, tx["price"])
+        time.sleep(0.5)
 
     orders = client.get("/orders").json()
-    assert len(orders) == 4
-    assert all(o["status"] == "closed" for o in orders)
+    assert len(orders) == 4 and all(o["status"] == "closed" for o in orders)
+    assert_no_locked_funds(client)
 
-# ---------------------------------------------------------------------------
-# 4)  Limit orders: place → cancel → verify reserve / release mechanics
-# ---------------------------------------------------------------------------
 
-@pytest.mark.skip(reason="requires live price tick to cross limit; enable when tick feed is attached")
+# ---------------------------------------------------------------------
+# 4) Limit orders: place → cancel → place-and-fill
+# ---------------------------------------------------------------------
 
-def test_limit_order_lifecycle(client: TestClient):
-    client.post("/admin/reset")
-    client.post("/admin/fund", json={"asset": "USDT", "amount": 10_000})
+def test_limit_order_lifecycle(client: TestClient) -> None:
+    """Ensure reserve/release mechanics for limit-buy orders."""
+    reset_and_fund(client, 10_000)
 
-    # 4‑a  place a limit‑buy far below spot so it stays *open*
-    order = {"symbol": "BTC/USDT", "side": "buy", "type": "limit", "amount": 0.02, "price": 1}  # unrealistic low
-    r = client.post("/orders", json=order).json()
-    oid = r["id"]
+    sym, amt = "BTC/USDT", 0.02
+    spot = client.get("/tickers/BTC/USDT").json()["last"]
 
-    # 4‑b  cancel it → funds should be released
-    client.post(f"/orders/{oid}/cancel")
-    o = client.get(f"/orders/{oid}").json()
-    assert o["status"] == "canceled"
+    # Three limit orders: extreme low (to cancel), near-spot, above-spot
+    defs = [
+        {"label": "low-cancel", "price": 1,           "expect": "canceled"},
+        {"label": "near-open",  "price": spot * 0.99, "expect": "open"},
+        {"label": "near-fill",  "price": spot * 1.01, "expect": "closed"},
+    ]
+    for d in defs:
+        d.update(symbol=sym, side="buy", type="limit", amount=amt)
 
-    # 4‑c  account free balance back to original (allow tiny fp tolerance)
-    bal = client.get("/balance/USDT").json()
-    assert abs(bal["free"] - 10_000) < 1e-6 and bal["used"] == 0
+    ids = place_orders(client, defs)
 
-    # 4‑d  spray a few limit‑buys near current price so at least one fills
-    near_price = client.get("/tickers/BTC/USDT").json()["last"]
-    for delta in (-10, -5, -2):
-        body = {"symbol": "BTC/USDT", "side": "buy", "type": "limit", "amount": 0.001, "price": near_price + delta}
-        client.post("/orders", json=body)
+    # Bump price after each placement – mirrors market-order test
+    for d in defs:
+        patch_ticker_price(client, sym, d["price"])
+        time.sleep(0.5)
 
-    # wait a bit for tick‑loop to settle (max 3× refresh interval)
-    timeout = time.time() + 3 * int(os.getenv("TICK_LOOP_SEC", "10"))
-    while time.time() < timeout:
-        closed = [o for o in client.get("/orders").json() if o["status"] == "closed"]
-        if closed:
-            break
-        time.sleep(1)
+    # Cancel the unrealistic low order
+    low_id = ids[0]
+    assert client.post(f"/orders/{low_id}/cancel").status_code == 200
 
-    assert closed, "no limit order executed within timeout"
+    # Final order-book snapshot & assertions
+    book = {o["id"]: o for o in client.get("/orders").json()}
+    for d, oid in zip(defs, ids):
+        assert book[oid]["status"] == d["expect"], f"{d['label']} wrong state"
 
+    assert_no_locked_funds(client)
+
+    # Free balance = initial – fill_cost (tiny epsilon)
+    fill_cost = amt * defs[2]["price"]
+    usdt = client.get("/balance/USDT").json()
+    assert abs(usdt["free"] - (10_000 - fill_cost)) < 1e-6

@@ -79,7 +79,6 @@ class OrderReq(BaseModel):
     price:  float | None = None      # only for limit orders
 
 class BalanceReq(BaseModel):
-    asset: str = "BTC"
     free:  float = Field(1.0, ge=0)
     used:  float = Field(0.0, ge=0)
 
@@ -88,7 +87,6 @@ class FundReq(BaseModel):
     amount: float = Field(100000.0, gt=0)
 
 class ModifyTickerReq(BaseModel):
-    symbol: str = "BTC/USDT"
     price:  float = Field(..., gt=0.0, description="New price for the ticker")
     bid_volume: float = Field(
         None,
@@ -138,8 +136,8 @@ def _try(fn):
 
 # Default root endpoint --------------------------------------------- #
 @app.get("/", include_in_schema=False)
-def root() -> dict:
-    return RedirectResponse(url="/docs")
+def root() -> dict[str, str]:
+    return {"service": "mockexchange-api", "version": app.version}
 
 # Market endpoints ------------------------------------------------------ #
 @app.get("/tickers", tags=["Market"])
@@ -205,75 +203,49 @@ def dry_run(req: OrderReq):
     )
 
 @app.post("/orders/{oid}/cancel", tags=["Orders"], dependencies=prod_depends)
-def cancel(
-    oid: str,
-):
-    """Cancel an *open* order by its ID."""
-    o = ENGINE.order_book.get(oid)
-
-    if o.status != "open":
-        raise HTTPException(400, "Only *open* orders can be canceled")
-
-    base, quote = o.symbol.split("/")
-
-    # -- Release reserved amounts based on order type and side
-    if o.side == "buy":
-        # release reserved quote (notion + fee)
-        released_base = 0.0
-        released_quote = o.amount * o.price + o.fee_cost
-        ENGINE._release(quote, released_quote)
-
-    else:  # sell
-        # release reserved base (asset) and quote (fee)
-        released_base = o.amount
-        released_quote = o.fee_cost
-        ENGINE._release(base, released_base)
-        ENGINE._release(quote, released_quote)
-
-    # -- Cancel order
-    o.status = "canceled"
-    o.ts_exec = int(time.time() * 1000)
-    ENGINE.order_book.update(o)
-
-    return {
-        "canceled_order": o.__dict__,
-        "freed": {
-            base: released_base,
-            quote: released_quote,
-        }
-    }
+def cancel(oid: str):
+    return _try(lambda: ENGINE.cancel_order(oid))
 
 # Balance admin --------------------------------------------------------- #
-@app.post("/admin/set_ticker", tags=["Admin"], dependencies=prod_depends)
-def modify_ticker(body: ModifyTickerReq):
+@app.patch("/admin/tickers/{ticker:path}/price", tags=["Admin"], dependencies=prod_depends)
+def patch_ticker_price(ticker: str, body: ModifyTickerReq):
     """
-    Set or modify a ticker's data.
+    Update the last-trade price (and optional volumes) for *ticker*.
+
+    Idempotent: sending the same payload twice leaves the ticker unchanged.
     """
     ts = time.time() / 1000  # current time in seconds since epoch
     price = body.price
     delta = price * 0.0001  # 0.01% of the price
     bid = price - delta
     ask = price + delta
-    ticker_data = _try(lambda: ENGINE.set_ticker(body.symbol, price, ts, bid, ask, body.bid_volume, body.ask_volume))
-    symbol = ticker_data['symbol']
-    try:
-        ENGINE.process_price_tick(symbol)
-    except Exception as e:
-        logger.error("Failed to process price tick for %s: %s", symbol, e)
-    return ticker_data
+    data = _try(
+        lambda: ENGINE.set_ticker(
+            ticker, price, ts, bid, ask, body.bid_volume, body.ask_volume
+        )
+    )
+    ENGINE.process_price_tick(ticker)
+    return data
 
-@app.post("/admin/edit_balance", tags=["Admin"], dependencies=prod_depends)
-def set_balance(req: BalanceReq):
-    return _try(lambda: ENGINE.set_balance(req.asset, free=req.free, used=req.used))
+@app.patch("/admin/balance/{asset}", tags=["Admin"], dependencies=prod_depends)
+def set_balance(asset: str, req: BalanceReq):
+    """Overwrite or create a balance row (idempotent)."""
+    return _try(lambda: ENGINE.set_balance(asset, free=req.free, used=req.used))
 
 @app.post("/admin/fund", tags=["Admin"], dependencies=prod_depends)
 def fund(body: FundReq):
     return _try(lambda: ENGINE.fund_asset(body.asset, body.amount))
 
-@app.post("/admin/reset", tags=["Admin"], dependencies=prod_depends)
-def reset():
+@app.delete("/admin/data", tags=["Admin"], dependencies=prod_depends)
+def purge_all():
+    """Wipe **all** balances and orders."""
     ENGINE.reset()
     return {"status": "ok", "message": "All balances and orders have been reset."}
+
+# --- Health check ------------------------------------------------------- #
+@app.get("/admin/healthz", include_in_schema=False)
+def health():
+    return {"status": "ok"}
 
 # ------------------------------------------------------------------------- #
 async def tick_loop() -> None:
