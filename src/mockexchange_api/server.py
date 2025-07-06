@@ -254,8 +254,17 @@ def cancel(
 # Balance admin --------------------------------------------------------- #
 @app.post("/admin/set_ticker", tags=["Admin"], dependencies=prod_depends)
 def modify_ticker(body: ModifyTickerReq):
+    """
+    Set or modify a ticker's data.
+    """
     ts = time.time() / 1000  # current time in seconds since epoch
-    return _try(lambda: ENGINE.set_ticker(body.symbol, body.price, ts, body.bid, body.ask, body.bid_volume, body.ask_volume))
+    ticker_data = _try(lambda: ENGINE.set_ticker(body.symbol, body.price, ts, body.bid, body.ask, body.bid_volume, body.ask_volume))
+    symbol = ticker_data['symbol']
+    try:
+        ENGINE.process_price_tick(symbol)
+    except Exception as e:
+        logger.error("Failed to process price tick for %s: %s", symbol, e)
+    return ticker_data
 
 @app.post("/admin/edit_balance", tags=["Admin"], dependencies=prod_depends)
 def set_balance(req: BalanceReq):
