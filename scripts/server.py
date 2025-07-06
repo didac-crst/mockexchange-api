@@ -68,13 +68,35 @@ def _try(fn):
         return fn()
     except ValueError as exc:
         raise HTTPException(400, detail=str(exc))
+    
+# ─────────────────────────────── Endpoints ───────────────────────────── #
+
+# Default root endpoint --------------------------------------------- #
+@app.get("/", tags=["Root"])
+def root() -> dict:
+    return {"name": "MockExchange API",
+            "description": "A mock exchange API for testing purposes",
+            "docs": "/docs",
+            "version": app.version,
+            "engine": ENGINE.__class__.__name__
+            }
 
 # Market endpoints ------------------------------------------------------ #
+@app.get("/symbols", tags=["Market"])
+def symbols() -> List[str]:
+    """
+    List all known symbols.
+
+    Returns a list of strings, e.g. ``["BTC/USDT", "ETH/USDT"]``.
+    """
+    return ENGINE.symbols
+
 @app.get("/ticker/{symbol:path}", tags=["Market"])
 def ticker(symbol: str):
     return _try(lambda: ENGINE.fetch_ticker(symbol))
 
-@app.get("/balance", tags="Portfolio")
+# Balance endpoints --------------------------------------------------- #
+@app.get("/balance", tags=["Portfolio"])
 def balance():
     return ENGINE.fetch_balance()
 
@@ -143,11 +165,10 @@ def cancel(oid: str):
 def set_balance(req: BalanceReq):
     return _try(lambda: ENGINE.set_balance(req.asset, free=req.free, used=req.used))
 
-@app.post("/balances/{asset}/fund")
+@app.post("/balances/{asset}/fund", tags=["Admin"])
 def fund(asset: str, body: FundReq):
     return _try(lambda: ENGINE.fund_asset(asset, body.amount))
 
-# Destructive admin ----------------------------------------------------- #
 @app.post("/admin/reset", tags=["Admin"])
 def reset():
     ENGINE.reset()
