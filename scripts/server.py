@@ -70,30 +70,30 @@ def _try(fn):
         raise HTTPException(400, detail=str(exc))
 
 # Market endpoints ------------------------------------------------------ #
-@app.get("/ticker/{symbol:path}")
+@app.get("/ticker/{symbol:path}", tags=["Market"])
 def ticker(symbol: str):
     return _try(lambda: ENGINE.fetch_ticker(symbol))
 
-@app.get("/balance")
+@app.get("/balance", tags="Portfolio")
 def balance():
     return ENGINE.fetch_balance()
 
 # Orders ---------------------------------------------------------------- #
-@app.post("/orders")
+@app.post("/orders", tags=["Orders"])
 async def new_order(req: OrderReq):
     try:
         return await ENGINE.create_order_async(**req.model_dump())
     except ValueError as e:
         raise HTTPException(400, str(e))
 
-@app.post("/orders/can_execute")
+@app.post("/orders/can_execute", tags=["Orders"])
 def dry_run(req: OrderReq):
     # `type` is irrelevant for balance check
     return ENGINE.can_execute(
         symbol=req.symbol, side=req.side, amount=req.amount, price=req.price
     )
 
-@app.get("/orders")
+@app.get("/orders", tags=["Orders"])
 def list_orders(
     status: Literal["open", "closed", "canceled"] | None = Query(
         None, description="Filter by order status"
@@ -102,7 +102,7 @@ def list_orders(
 ):
     return [o.__dict__ for o in ENGINE.order_book.list(status=status, symbol=symbol)]
 
-@app.post("/orders/{oid}/cancel")
+@app.post("/orders/{oid}/cancel", tags=["Orders"])
 def cancel(oid: str):
     o = ENGINE.order_book.get(oid)
 
@@ -139,7 +139,7 @@ def cancel(oid: str):
     }
 
 # Balance admin --------------------------------------------------------- #
-@app.post("/balances")
+@app.post("/balances", tags=["Admin"])
 def set_balance(req: BalanceReq):
     return _try(lambda: ENGINE.set_balance(req.asset, free=req.free, used=req.used))
 
@@ -148,7 +148,7 @@ def fund(asset: str, body: FundReq):
     return _try(lambda: ENGINE.fund_asset(asset, body.amount))
 
 # Destructive admin ----------------------------------------------------- #
-@app.post("/admin/reset")
+@app.post("/admin/reset", tags=["Admin"])
 def reset():
     ENGINE.reset()
     return {"status": "ok"}
