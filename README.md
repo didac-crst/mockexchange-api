@@ -1,12 +1,11 @@
-````
 # MockExchange API 📈
 
 A **zero-risk** spot-exchange emulator that speaks the exact JSON dialect your ccxt-based trading bots expect — but stores every price tick, balance and order in **Valkey (aka Redis)** instead of touching live markets.
 
 - **One binary, three faces**
-  - 🐍 Import as a normal Python package in your back-tests.
-  - 🐳 Run as a Docker container exposing a FastAPI server.
-  - 💻 Fire quick commands via the bundled CLI.
+- 🐍 Import as a normal Python package in your back-tests.
+- 🐳 Run as a Docker container exposing a FastAPI server.
+- 💻 Fire quick commands via the bundled CLI.
 - **Deterministic & Stateless** — wipe everything with one `POST /admin/reset`.
 - **Pluggable data-feed** — point the engine to any key-value store that writes `sym_<SYMBOL>` → *last price* and the tick-loop does the rest.
 - **Consistent commission model** — flat `COMMISSION` rate applied on every fill.
@@ -18,12 +17,12 @@ A **zero-risk** spot-exchange emulator that speaks the exact JSON dialect your c
 ```bash
 # 1  Start Valkey (persist to ./data)
 $ docker run -d --name valkey -p 6379:6379 \
-      -v $(pwd)/data:/data valkey/valkey:latest
+    -v $(pwd)/data:/data valkey/valkey:latest
 
 # 2  Boot the API in front of it (auth enabled)
 $ docker run -d --name mockexchange-api --network host \
-      -e API_KEY=my-secret \
-      ghcr.io/your-org/mockexchange-api:latest
+    -e API_KEY=my-secret \
+    ghcr.io/your-org/mockexchange-api:latest
 
 # 3  Open docs (only if TEST_ENV=true)
 $ open http://localhost:8000/docs
@@ -82,8 +81,8 @@ Set the header once at *collection* level in Postman or use `curl -H "x-api-key:
 # fund the account with 100 000 USDT
 auth='-H "x-api-key:my-secret"'
 curl -X POST $auth -H "Content-Type: application/json" \
-     -d '{"asset":"USDT","amount":100000}' \
-     http://localhost:8000/admin/fund
+    -d '{"asset":"USDT","amount":100000}' \
+    http://localhost:8000/admin/fund
 
 # get initial balance
 curl $auth http://localhost:8000/balance
@@ -91,11 +90,11 @@ curl $auth http://localhost:8000/balance
 # dry-run a 0.05 BTC market buy
 data='{"symbol":"BTC/USDT","side":"buy","amount":0.05}'
 curl -X POST $auth -H "Content-Type: application/json" \
-     -d "$data" http://localhost:8000/orders/can_execute
+    -d "$data" http://localhost:8000/orders/can_execute
 
 # execute the order for real
 curl -X POST $auth -H "Content-Type: application/json" \
-     -d "$data" http://localhost:8000/orders
+    -d "$data" http://localhost:8000/orders
 ```
 
 ---
@@ -142,17 +141,17 @@ mockexchange-api/
 │       ├── orderbook.py      ← orders
 │       └── _types.py         ← dataclasses / enums
 └── scripts/
-    ├── server.py             ← FastAPI wrapper (imports Engine)
-    └── cli.py                ← thin command-line helper
+  ├── server.py             ← FastAPI wrapper (imports Engine)
+  └── cli.py                ← thin command-line helper
 ```
 
 ---
 
 ##  Development notes
 * Unit-tests use a **temporary Valkey** started with  
-  `valkey-server --save '' --appendonly no` on a random port.
+`valkey-server --save '' --appendonly no` on a random port.
 * Market data is whatever you drop into hashes:  
-  `HSET sym_BTC/USDT price 56000 timestamp $(date +%s)`.
+`HSET sym_BTC/USDT price 56000 timestamp $(date +%s)`.
 * Commission is read from `COMMISSION` env (default 0.00075 = 0.075 %).
 
 ---
@@ -166,4 +165,3 @@ Contributions are welcome! If you have suggestions for improvements or find a bu
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 > **Don’t risk real money.** Spin up MockExchange, hammer it with tests, then hit the real markets only when your algos are solid.
-````
