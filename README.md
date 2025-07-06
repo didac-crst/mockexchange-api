@@ -139,6 +139,7 @@ mockexchange-api/
 │       ├── market.py         ← ticker facade
 │       ├── portfolio.py      ← balances
 │       ├── orderbook.py      ← orders
+│       ├── logging_config.py ← logging implement
 │       └── _types.py         ← dataclasses / enums
 └── scripts/
   ├── server.py             ← FastAPI wrapper (imports Engine)

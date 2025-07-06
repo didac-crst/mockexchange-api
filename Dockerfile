@@ -14,8 +14,6 @@ RUN poetry install --no-root --only main
 # --- copy the actual source code -----------------------------------
 COPY src ./src
 RUN ls -l ./src
-# (optional) copy anything else you need at runtime
-# COPY scripts ./scripts
 
 # make the package importable for uvicorn
 RUN python -m pip install --no-cache-dir --editable .
