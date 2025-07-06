@@ -25,7 +25,7 @@ import asyncio, os
 from typing import List, Literal
 import time
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -53,6 +53,11 @@ class FundReq(BaseModel):
 # ───────────────────── initialise singleton engine ───────────────────── #
 
 REFRESH_S = int(os.getenv("TICK_LOOP_SEC", "10"))
+API_KEY = os.getenv("API_KEY", "invalid-key")  # default is invalid key
+
+async def verify_key(x_api_key: str = Header(...)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
 
 ENGINE = ExchangeEngine(
     redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
@@ -68,6 +73,9 @@ app = FastAPI(title="MockExchange API",
                     "tryItOutEnabled": True,  # enable "Try it out" button
                 },
                 docs_url="/docs",
+                dependencies=[
+                    Depends(lambda api_key: api_key == API_KEY if API_KEY else True)
+                ]  # API key check
             )
 
 # Helpers: wrap calls so every endpoint is ≤ 3 lines -------------------- #
