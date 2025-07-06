@@ -50,6 +50,7 @@ class OrderBook:
             if symbol and o.symbol != symbol:
                 continue
             out.append(o)
+        out.sort(key=lambda o: o.ts_post)  # sort by timestamp
         return out
 
     def clear(self) -> None:

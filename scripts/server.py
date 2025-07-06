@@ -104,6 +104,15 @@ def balance():
     return ENGINE.fetch_balance()
 
 # Orders ---------------------------------------------------------------- #
+@app.get("/orders", tags=["Orders"])
+def list_orders(
+    status: Literal["open", "closed", "canceled"] | None = Query(
+        None, description="Filter by order status"
+    ),
+    symbol: str | None = Query(None, description="BTC/USDT etc."),
+):
+    return [o.__dict__ for o in ENGINE.order_book.list(status=status, symbol=symbol)]
+
 @app.post("/orders", tags=["Orders"])
 async def new_order(req: OrderReq):
     try:
@@ -117,15 +126,6 @@ def dry_run(req: OrderReq):
     return ENGINE.can_execute(
         symbol=req.symbol, side=req.side, amount=req.amount, price=req.price
     )
-
-@app.get("/orders", tags=["Orders"])
-def list_orders(
-    status: Literal["open", "closed", "canceled"] | None = Query(
-        None, description="Filter by order status"
-    ),
-    symbol: str | None = Query(None, description="BTC/USDT etc."),
-):
-    return [o.__dict__ for o in ENGINE.order_book.list(status=status, symbol=symbol)]
 
 @app.post("/orders/{oid}/cancel", tags=["Orders"])
 def cancel(oid: str):
