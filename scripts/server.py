@@ -4,20 +4,57 @@ server.py
 
 FastAPI façade over :class:`mockexchange.engine.ExchangeEngine`.
 
-*   **No business logic** lives here – we merely translate HTTP ⇆ Python.
-*   Designed to run **inside a Docker container** (host-network mode is fine).
+* **No business logic** lives here – we only translate *HTTP ⇄ Python*.
+* Designed to run **inside a Docker container** (host-network is fine).
+* All state (balances, orders, tick data) persists in Valkey/Redis.
+* **Authentication**  
+  Every request must include  
+  ``x-api-key: $API_KEY`` unless the container is started with  
+  ``TEST_ENV=true`` (integration tests).
 
-Endpoints
----------
-GET  /ticker/{symbol}          single ticker  
-GET  /balance                  full account snapshot  
-POST /orders                   create (market|limit) order  
-POST /orders/can_execute       dry-run balance check  
-GET  /orders                   list open|closed|canceled  
-POST /orders/{oid}/cancel      cancel *open* order  
-POST /balances                 create/overwrite balance row  
-POST /balances/{asset}/fund    credit asset in *free* column  
-POST /admin/reset              wipe balances & orders
+Environment variables
+---------------------
+API_KEY required key for every request (default: "invalid-key")
+REDIS_URL redis://host:port/db (default: localhost:6379/0)
+COMMISSION trading fee, e.g. 0.001 (default: 0.001 = 0.1 %)
+TICK_LOOP_SEC price-tick scan interval (default: 10 s)
+TEST_ENV set to 1 / true to disable auth & expose /docs
+
+HTTP Endpoints
+--------------
+Market data
+~~~~~~~~~~~
+GET  **/tickers**                      → list of all symbols  
+GET  **/tickers/{symbol}**             → one ticker (e.g. ``BTC/USDT``)
+
+Portfolio
+~~~~~~~~~
+GET  **/balance**                      → full account snapshot  
+GET  **/balance/{asset}**              → asset row only (``free``, ``used``)
+
+Orders
+~~~~~~
+GET  **/orders**                       → list orders, optional filters  
+GET  **/orders/{oid}**                 → single order by id  
+POST **/orders**                       → create *market* | *limit* order  
+POST **/orders/can_execute**           → dry-run balance check  
+POST **/orders/{oid}/cancel**          → cancel *open* order
+
+Admin
+~~~~~
+POST **/admin/edit_balance**           → overwrite or add a balance row  
+POST **/admin/fund**                   → credit an asset’s *free* column  
+POST **/admin/reset**                  → wipe balances **and** orders
+
+Implementation notes
+--------------------
+* The background *tick-loop* scans keys ``sym_*`` in Redis every
+  ``TICK_LOOP_SEC`` seconds and settles limit orders whose prices have
+  crossed.
+* API docs (`/docs`) and the raw OpenAPI JSON are **disabled in
+  production** for safety; they are exposed automatically when
+  ``TEST_ENV=true``.
+
 """
 from __future__ import annotations
 
@@ -103,7 +140,7 @@ def all_tickers() -> List[str]:
     """
     return ENGINE.tickers
 
-@app.get("/tickers/{ticker}", tags=["Market"])
+@app.get("/tickers/{ticker:path}", tags=["Market"])
 def ticker(ticker: str = "BTC/USDT"):
     """ Get a single ticker.
 
