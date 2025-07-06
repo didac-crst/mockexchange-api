@@ -53,6 +53,7 @@ class FundReq(BaseModel):
 # ───────────────────── initialise singleton engine ───────────────────── #
 
 REFRESH_S = int(os.getenv("TICK_LOOP_SEC", "10"))
+DISPLAY_DOCS = os.getenv("DISPLAY_DOCS", "True").lower() in ("true", "1", "yes")
 API_KEY = os.getenv("API_KEY", "invalid-key")  # default is invalid key
 
 async def verify_key(x_api_key: str = Header(...)):
@@ -72,7 +73,7 @@ app = FastAPI(title="MockExchange API",
                 swagger_ui_parameters={
                     "tryItOutEnabled": True,  # enable "Try it out" button
                 },
-                docs_url="/docs",
+                docs_url="/docs" if DISPLAY_DOCS else None,
             )
 
 # Helpers: wrap calls so every endpoint is ≤ 3 lines -------------------- #
