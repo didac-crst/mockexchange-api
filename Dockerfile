@@ -4,8 +4,8 @@ WORKDIR /app
 
 # copy project
 COPY pyproject.toml README.md .
-COPY src ./src
-COPY scripts ./scripts
+COPY src/mockexchange ./src
+COPY src/scripts ./scripts
 
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir .
