@@ -73,9 +73,6 @@ app = FastAPI(title="MockExchange API",
                     "tryItOutEnabled": True,  # enable "Try it out" button
                 },
                 docs_url="/docs",
-                dependencies=[
-                    Depends(lambda api_key: api_key == API_KEY if API_KEY else True)
-                ]  # API key check
             )
 
 # Helpers: wrap calls so every endpoint is ≤ 3 lines -------------------- #
