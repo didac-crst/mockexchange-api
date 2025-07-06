@@ -121,7 +121,7 @@ def list_orders(
 ):
     return [o.__dict__ for o in ENGINE.order_book.list(status=status, symbol=symbol)]
 
-@app.post("/orders", tags=["Orders"])
+@app.post("/orders", tags=["Orders"], dependencies=[Depends(verify_key)])
 async def new_order(req: OrderReq):
     try:
         return await ENGINE.create_order_async(**req.model_dump())
@@ -135,7 +135,7 @@ def dry_run(req: OrderReq):
         symbol=req.symbol, side=req.side, amount=req.amount, price=req.price
     )
 
-@app.post("/orders/{oid}/cancel", tags=["Orders"])
+@app.post("/orders/cancel/{oid}", tags=["Orders"], dependencies=[Depends(verify_key)])
 def cancel(oid: str):
     o = ENGINE.order_book.get(oid)
 
@@ -172,15 +172,15 @@ def cancel(oid: str):
     }
 
 # Balance admin --------------------------------------------------------- #
-@app.post("/admin/edit_balance", tags=["Admin"])
+@app.post("/admin/edit_balance", tags=["Admin"], dependencies=[Depends(verify_key)])
 def set_balance(req: BalanceReq):
     return _try(lambda: ENGINE.set_balance(req.asset, free=req.free, used=req.used))
 
-@app.post("/admin/fund/{asset}", tags=["Admin"])
+@app.post("/admin/fund/{asset}", tags=["Admin"], dependencies=[Depends(verify_key)])
 def fund(asset: str, body: FundReq):
     return _try(lambda: ENGINE.fund_asset(asset, body.amount))
 
-@app.post("/admin/reset", tags=["Admin"])
+@app.post("/admin/reset", tags=["Admin"], dependencies=[Depends(verify_key)])
 def reset():
     ENGINE.reset()
     return {"status": "ok"}
