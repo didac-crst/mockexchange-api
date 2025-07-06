@@ -1,24 +1,32 @@
-[project]
-name = "mockexchange"
-version = "0.1.0"
+[tool.poetry]
+name        = "mockexchange"
+version     = "0.1.0"
 description = "Headless exchange emulator backed by Valkey (Redis fork)"
-authors = [{ name = "Didac" }]
-requires-python = ">=3.11"
-dependencies = [
-  "redis>=5.0",
-  "fastapi>=0.111",
-  "uvicorn[standard]>=0.30",
-  "pydantic>=2.6",
+authors     = ["Didac Cristobal-Canals"]
+homepage    = "https://github.com/didac-crst/mockexchange-api"
+
+# Correct shape: an array of tables
+packages = [
+  { include = "mockexchange", from = "src" }
 ]
 
-[project.optional-dependencies]
-dev = ["pytest", "ruff", "black"]
+[tool.poetry.dependencies]
+python   = ">=3.11"        # already enforces the interpreter version
+redis    = "^5.0"
+fastapi  = "^0.111"
+uvicorn  = { extras = ["standard"], version = "^0.30" }
+pydantic = "^2.6"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.poetry.group.dev.dependencies]
+pytest          = "^8.2"
+pytest-asyncio  = "^0.23"
+ruff            = "*"
+black           = "*"
+mypy            = "^1.10"
 
-[project.urls]
-Homepage   = "https://github.com/didac-crst/mockexchange-api"
-
-[project.scripts]
+[tool.poetry.scripts]
 mockx = "mockexchange.cli:cli"
+
+[build-system]
+requires      = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
