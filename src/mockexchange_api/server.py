@@ -65,6 +65,7 @@ import time
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
+from contextlib import asynccontextmanager
 
 from mockexchange.engine import ExchangeEngine
 from mockexchange.logging_config import logger
@@ -115,6 +116,13 @@ ENGINE = ExchangeEngine(
 )
 
 # ───────────────────────────── FastAPI app ───────────────────────────── #
+
+@asynccontextmanager
+async def lifespan(app):
+    # start background task
+    task = asyncio.create_task(tick_loop())
+    yield                     # <-- application runs here
+    task.cancel()             # optional: tidy shutdown if you want
 
 app = FastAPI(title="MockExchange API",
                 version="0.2",
@@ -289,13 +297,13 @@ async def tick_loop() -> None:
         await asyncio.sleep(REFRESH_S)
 
 
-@app.on_event("startup")
-async def _boot_loop() -> None:
-    """
-    FastAPI lifecycle hook.
+# @app.on_event("startup")
+# async def _boot_loop() -> None:
+#     """
+#     FastAPI lifecycle hook.
 
-    At application start-up we *detach* the price-tick coroutine.  The
-    task lives as long as the Uvicorn worker lives and does **not**
-    block the main event-loop.
-    """
-    asyncio.create_task(tick_loop())
+#     At application start-up we *detach* the price-tick coroutine.  The
+#     task lives as long as the Uvicorn worker lives and does **not**
+#     block the main event-loop.
+#     """
+#     asyncio.create_task(tick_loop())
