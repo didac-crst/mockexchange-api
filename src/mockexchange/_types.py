@@ -67,7 +67,9 @@ class Order:
     price         actual execution price (set at fill time)
     limit_price   user-defined limit price (None for market orders)
     filled        total amount filled so far
+    booked_notion  notion value booked for the order (not yet filled)
     notion        total traded value (filled × price)
+    booked_fee   fee booked for the order (not yet paid)
     fee_cost      fee paid for the order
     fee_rate      fee rate (e.g. 0.001 for 0.1%)
     notion_currency  quote currency used for value (e.g. USDT)
@@ -88,6 +90,8 @@ class Order:
     notion_currency: str  # usually the quote currency, e.g. USDT
     fee_currency: str
     fee_rate: float
+    booked_notion: float
+    booked_fee: float
     # Runtime-mutable fields
     price: Optional[float] = None
     limit_price: Optional[float] = None  # None for market orders

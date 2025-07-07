@@ -68,34 +68,38 @@ class ExchangeEngine:
         self.portfolio.set(bal)
         return qty
 
-    def _get_booked_real_amounts(self, amount: float, filled: float, price: float) -> Dict[str, float]:
-        """ Calculate booked and real amounts for an order. """
-        fee_rate = self.commission
-        booked_notion = amount * price
-        booked_fee = booked_notion * fee_rate
-        real_notion = filled * price
-        real_fee = real_notion * fee_rate
-        return { "booked_notion": booked_notion, "booked_fee": booked_fee, "real_notion": real_notion, "real_fee": real_fee }
+    # def _get_booked_real_amounts(self, amount: float, filled: float, price: float) -> Dict[str, float]:
+    #     """ Calculate booked and real amounts for an order. """
+    #     fee_rate = self.commission
+    #     booked_notion = amount * price
+    #     booked_fee = booked_notion * fee_rate
+    #     real_notion = filled * price
+    #     real_fee = real_notion * fee_rate
+    #     return { "booked_notion": booked_notion, "booked_fee": booked_fee, "real_notion": real_notion, "real_fee": real_fee }
 
     def _execute_buy(self,
                      base: str,
                      quote: str,
                      amount: float,
+                     booked_notion: float,
+                     booked_fee: float,
                      filled: float,
                      price: float) -> Dict[str, float]:
         """
         Execute a buy order by:
         """
-        _real_amounts = self._get_booked_real_amounts(amount, filled, price)
-        booked_notion = _real_amounts["booked_notion"]
-        booked_fee = _real_amounts["booked_fee"]
-        real_notion = _real_amounts["real_notion"]
-        real_fee = _real_amounts["real_fee"]
+        # _real_amounts = self._get_booked_real_amounts(amount, filled, price)
+        # booked_notion = _real_amounts["booked_notion"]
+        # booked_fee = _real_amounts["booked_fee"]
+        # real_notion = _real_amounts["real_notion"]
+        # real_fee = _real_amounts["real_fee"]
         # Release reserved quote (notion + fee)
         # and reduces cash from quote balance
         self._release(quote, booked_notion + booked_fee)
         cash = self.portfolio.get(quote)
-        cash.free -= (real_notion + real_fee)
+        notion = filled * price
+        fee = notion * self.commission
+        cash.free -= (notion + fee)  # reduce cash by notion + fee
         self.portfolio.set(cash)
         # Increase asset amount in portfolio
         asset = self.portfolio.get(base)
@@ -103,25 +107,27 @@ class ExchangeEngine:
         self.portfolio.set(asset)
         transaction_info = {
             "price": price,
-            "notion": real_notion,
+            "notion": notion,
             "filled": filled,
-            "fee": real_fee,
+            "fee": fee,
         }
         return transaction_info
     
     def _execute_sell(self,
-                      base: str,
-                      quote: str,
-                      amount: float,
-                      filled: float,
-                      price: float) -> Dict[str, float]:
+                        base: str,
+                        quote: str,
+                        amount: float,
+                        booked_notion: float,
+                        booked_fee: float,
+                        filled: float,
+                        price: float) -> Dict[str, float]:
         """
         Execute a sell order by:
         """
-        _real_amounts = self._get_booked_real_amounts(amount, filled, price)
-        booked_fee = _real_amounts["booked_fee"]
-        real_notion = _real_amounts["real_notion"]
-        real_fee = _real_amounts["real_fee"]
+        # _real_amounts = self._get_booked_real_amounts(amount, filled, price)
+        # booked_fee = _real_amounts["booked_fee"]
+        # real_notion = _real_amounts["real_notion"]
+        # real_fee = _real_amounts["real_fee"]
         # Release reserved base (asset)
         # and reduces asset amount in portfolio
         self._release(base, amount)
@@ -132,14 +138,16 @@ class ExchangeEngine:
         # and increases cash in quote balance
         self._release(quote, booked_fee)
         cash = self.portfolio.get(quote)
-        cash.free -= real_fee
-        cash.free += real_notion
+        notion = filled * price
+        fee = notion * self.commission
+        cash.free -= fee
+        cash.free += notion
         self.portfolio.set(cash)
         transaction_info = {
             "price": price,
-            "notion": real_notion,
+            "notion": notion,
             "filled": filled,
-            "fee": real_fee,
+            "fee": fee,
         }
         return transaction_info
 
@@ -282,6 +290,7 @@ class ExchangeEngine:
             id=self._uid(), symbol=symbol, side=side, type=type,
             amount=amount, limit_price=limit_price, notion_currency=quote,
             fee_rate=self.commission, fee_currency=quote,
+            booked_notion=notion, booked_fee=fee,
             status="open", filled=0.0,
             ts_post=int(time.time()*1000), ts_exec=None,
         )
@@ -298,6 +307,8 @@ class ExchangeEngine:
                     base=base,
                     quote=quote,
                     amount=amount,
+                    booked_notion=order.booked_notion,
+                    booked_fee=order.booked_fee,
                     filled=self._filled_amount(amount, MIN_FILL),
                     price=price,
                 )
@@ -306,6 +317,8 @@ class ExchangeEngine:
                     base=base,
                     quote=quote,
                     amount=amount,
+                    booked_notion=order.booked_notion,
+                    booked_fee=order.booked_fee,
                     filled=self._filled_amount(amount, MIN_FILL),
                     price=price,
                 )
@@ -402,9 +415,21 @@ class ExchangeEngine:
             base, quote = symbol.split("/")
 
             if o.side == "buy":
-                tx = self._execute_buy( base, quote, o.amount, o.amount, ask )
+                tx = self._execute_buy(
+                    base, quote, o.amount,
+                    booked_notion=o.booked_notion,
+                    booked_fee=o.booked_fee,
+                    filled=self._filled_amount(o.amount, MIN_FILL),
+                    price=ask
+                )
             else:                        # sell
-                tx = self._execute_sell( base, quote, o.amount, o.amount, bid )
+                tx = self._execute_sell(
+                    base, quote, o.amount,
+                    booked_notion=o.booked_notion,
+                    booked_fee=o.booked_fee,
+                    filled=self._filled_amount(o.amount, MIN_FILL),
+                    price=bid
+                )
 
             # ---- finalise order ----------------------------------------
             o.status   = "closed"
