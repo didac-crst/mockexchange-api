@@ -10,9 +10,9 @@ import time
 import json
 
 # # ─── Domain constants ────────────────────────────────────────────────────
-# OrderSide  = type("OrderSide",  (), {"BUY": "buy",  "SELL": "sell"})
-# OrderType  = type("OrderType",  (), {"MARKET": "market", "LIMIT": "limit"})
-# OrderState = type("OrderState", (), {"OPEN": "open", "CLOSED": "closed", "CANCELED": "canceled"})
+OrderSide  = type("OrderSide",  (), {"BUY": "buy",  "SELL": "sell"})
+OrderType  = type("OrderType",  (), {"MARKET": "market", "LIMIT": "limit"})
+OrderState = type("OrderState", (), {"OPEN": "open", "CLOSED": "closed", "CANCELED": "canceled"})
 
 # ─── Data classes ────────────────────────────────────────────────────────
 @dataclass
@@ -92,9 +92,9 @@ class Order:
     price: Optional[float] = None
     limit_price: Optional[float] = None  # None for market orders
     status: str = "open"
-    filled: float = 0.0 # until filled
-    notion: float = 0.0 # until filled
-    fee_cost: float = 0.0 #  until filled
+    filled: Optional[float] = None  # until filled
+    notion: Optional[float] = None  # until filled
+    fee_cost: Optional[float] = None  #  until filled
     ts_post: int = field(default_factory=lambda: int(time.time() * 1000))
     ts_exec: Optional[int] = None  # updated when status→closed
 

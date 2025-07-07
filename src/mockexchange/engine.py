@@ -11,6 +11,7 @@ from .market import Market
 from .portfolio import Portfolio
 from .orderbook import OrderBook
 from ._types import Order, AssetBalance
+from .logging_config import logger
 
 MIN_FILL = 1.0  # minimum fill factor for market orders, 1.0 = 100%
 
@@ -175,6 +176,48 @@ class ExchangeEngine:
                 return False, f"need {amount:.8f} {base}, have {have:.8f}"
         return True, None
 
+    def _log_order(self, order: Order) -> None:
+        """
+        Compact order logger that works for both market- and limit-orders.
+        """
+
+        if order.type not in {"market", "limit"}:
+            raise ValueError(f"Invalid order type: {order.type}")
+
+        if order.price is None:
+        # market order
+            if order.type == "market":
+                px = None
+            else:
+                px = order.limit_price
+        else:  # limit order
+            px = order.price
+        ticker = order.symbol
+        price_str = f"{px:.2f} {ticker}" if px is not None else "MKT"
+
+        if order.fee_cost is None:
+            fee_str = "N/A"
+        else:
+            fee_str = f"{order.fee_cost:.2f} {order.fee_currency}"
+
+        asset = ticker.split("/")[0]
+        msg = (
+            f"Order {order.id} [{order.type.capitalize()}]: "
+            f"{order.side.upper()} {order.amount:.8f} {asset} "
+            f"at {price_str}, "
+            f"fee {fee_str} "
+            f"[{order.status.upper()}]"
+        )
+
+        if order.status == "open":
+            msg = "Created "  + msg
+        elif order.status == "closed":
+            msg = "Executed "  + msg
+        elif order.status == "canceled":
+            msg = "Canceled " + msg
+
+        logger.info(msg)
+
     # ------------------------------------------------ public API ------- #
     def fetch_ticker(self, ticker: str) -> Dict[str, Any]:
         """
@@ -243,6 +286,7 @@ class ExchangeEngine:
             ts_post=int(time.time()*1000), ts_exec=None,
         )
         self.order_book.add(order)             # first write
+        self._log_order(order)                 # log the order
 
         # ---------- market ⇒ wait & fill ----------------------------------
         if type == "market":
@@ -274,7 +318,7 @@ class ExchangeEngine:
             order.fee_cost = transaction_info["fee"]
             order.ts_exec = int(time.time()*1000)
             self.order_book.update(order)             # overwrite
-
+            self._log_order(order)                     # log the order
         # ---------- limit ⇒ nothing else (stays OPEN) ---------------------
         return order.__dict__
 
@@ -289,16 +333,22 @@ class ExchangeEngine:
         base, quote = o.symbol.split("/")
 
         # -- Release reserved amounts based on order type and side
+                    # choose a price for the reservation we made
+        px = o.limit_price
+        if px is None:
+            raise RuntimeError("Limit order has no limit_price set")
         if o.side == "buy":
-            # release reserved quote (notion + fee)
             released_base = 0.0
-            released_quote = o.amount * o.limit_price + o.fee_cost
+            notion = o.amount * px
+            fee = notion * o.fee_rate
+            released_quote = notion + fee
             self._release(quote, released_quote)
 
         else:  # sell
             # release reserved base (asset) and quote (fee)
             released_base = o.amount
-            released_quote = o.fee_cost
+            fee = o.amount * px * o.fee_rate
+            released_quote = fee
             self._release(base, released_base)
             self._release(quote, released_quote)
 
@@ -306,6 +356,7 @@ class ExchangeEngine:
         o.status = "canceled"
         o.ts_exec = int(time.time() * 1000)
         self.order_book.update(o)
+        self._log_order(o)
         return {
             "canceled_order": o.__dict__,
             "freed": {base: released_base, quote: released_quote},
@@ -314,54 +365,56 @@ class ExchangeEngine:
 
     # --------------------- LIMIT-FILL TRIGGER ------------------------- #
     def process_price_tick(self, symbol: str) -> None:
-        """Call after each price update to check if any OPEN limit hits."""
         ticker = self.market.fetch_ticker(symbol)
-        if ticker is None:                  # malformed or missing – just skip
+        if ticker is None:
+            logger.warning("Ticker %s not found in market", symbol)
             return
-        ask = ticker['ask']
-        bid = ticker['bid']
-        ask_volume = float(ticker.get('ask_volume', 0.0))
-        bid_volume = float(ticker.get('bid_volume', 0.0))
+
+        ask, bid = ticker["ask"], ticker["bid"]
+        ask_vol  = float(ticker.get("ask_volume", 0))
+        bid_vol  = float(ticker.get("bid_volume", 0))
+
         for o in self.order_book.list(status="open", symbol=symbol):
-            if o.price is None:
-                raise ValueError("Market orders cannot be processed via price ticks")
+            #logger.info("Processing order %s for symbol %s", o.id, symbol)
+            # 💡 1. ignore market orders that should never be on the book
+            if o.type == "market":
+                logger.warning("Market order %s is still in order book – skipping", o.id)
+                continue
 
-            # Determine if the order hits and can be fully filled
-            is_fillable = (
-                (o.side == "buy"  and ask <= o.limit_price and o.amount <= ask_volume) or
-                (o.side == "sell" and bid >= o.limit_price and o.amount <= bid_volume)
+            # 💡 2. guard against malformed orders (limit_price must exist)
+            if o.limit_price is None:
+                logger.warning("Limit order %s has no limit_price – skipping", o.id)
+                continue
+
+            # ---- does the price cross and is there enough liquidity? ----
+            fillable = (
+                (o.side == "buy"  and ask <= o.limit_price and o.amount <= ask_vol) or
+                (o.side == "sell" and bid >= o.limit_price and o.amount <= bid_vol)
             )
+            msg = (f"Order {o.id} [{o.symbol} - {o.side}] fillable: {fillable}, "
+                        f"ts_post: {o.ts_post}, limit_price: {o.limit_price}, amount: {o.amount}, "
+                        f"(ask={ask}, bid={bid})")
+            logger.debug(msg)
 
-            if not is_fillable:
-                continue  # skip this order for now
+            if not fillable:
+                continue
 
             base, quote = symbol.split("/")
 
             if o.side == "buy":
-                transaction_info = self._execute_buy(
-                    base=base,
-                    quote=quote,
-                    amount=o.amount,
-                    filled=o.amount,
-                    price=ask,
-                )
-            else:  # sell
-                transaction_info = self._execute_sell(
-                    base=base,
-                    quote=quote,
-                    amount=o.amount,
-                    filled=o.amount,
-                    price=bid,
-                )
+                tx = self._execute_buy( base, quote, o.amount, o.amount, ask )
+            else:                        # sell
+                tx = self._execute_sell( base, quote, o.amount, o.amount, bid )
 
-            # Finalize order
-            o.status = "closed"
-            o.price = transaction_info["price"]
-            o.notion = transaction_info["notion"]
-            o.fee_cost = transaction_info["fee"]
-            o.filled = transaction_info["filled"]
-            o.ts_exec = int(time.time() * 1000)
+            # ---- finalise order ----------------------------------------
+            o.status   = "closed"
+            o.price    = tx["price"]          # ask / bid used for execution
+            o.filled   = tx["filled"]
+            o.notion   = tx["notion"]
+            o.fee_cost = tx["fee"]
+            o.ts_exec  = int(time.time() * 1000)
             self.order_book.update(o)
+            self._log_order(o)
 
 
     # ---------------------- admin helpers ----------------------------- #

@@ -77,7 +77,7 @@ class OrderReq(BaseModel):
     side:   Literal["buy", "sell"]
     type:   Literal["market", "limit"] = "market"
     amount: float
-    price:  float | None = None      # only for limit orders
+    limit_price:  float | None = None      # only for limit orders
 
 class BalanceReq(BaseModel):
     free:  float = Field(1.0, ge=0)
@@ -224,16 +224,25 @@ def patch_ticker_price(ticker: str, body: ModifyTickerReq):
     Idempotent: sending the same payload twice leaves the ticker unchanged.
     """
     ts = time.time() / 1000  # current time in seconds since epoch
+    notion_for_volume = 100_000 # 100k USD is the default volume
     price = body.price
-    delta = price * 0.0001  # 0.01% of the price
-    bid = price - delta
-    ask = price + delta
+    bid = price
+    ask = price
+    if body.bid_volume is None or body.bid_volume <= 0:
+        body.bid_volume = notion_for_volume / bid if bid > 0 else 0.0
+    if body.ask_volume is None or body.ask_volume <= 0:
+        body.ask_volume = notion_for_volume / ask if ask > 0 else 0.0
     data = _try(
         lambda: ENGINE.set_ticker(
             ticker, price, ts, bid, ask, body.bid_volume, body.ask_volume
         )
     )
-    ENGINE.process_price_tick(ticker)
+    try:
+        logger.info("Manually updating ticker %s", ticker)
+        # Process the price tick to update orders and balances
+        ENGINE.process_price_tick(ticker)
+    except Exception as exc:
+        logger.warning("Failed to process price tick for %s: %s", ticker, exc)
     return data
 
 @app.patch("/admin/balance/{asset}", tags=["Admin"], dependencies=prod_depends)
@@ -280,32 +289,16 @@ async def tick_loop() -> None:
       The loop is dead-simple and good enough for an emulator.  
       When you already publish real-time prices through Redis channels
       you can swap this loop for a subscriber that calls
-      ``process_price_tick(symbol)`` **only when** a new price arrives.
-    * **Error handling:**  
-      If a key disappears between *scan* and *get*, Valkey raises
-      ``ValueError``.  We swallow it because that race is harmless.
+      ``process_price_tick(ticker)`` on every message.
     """
     while True:
         logger.debug(f"[tick_loop] scanning @ {time.strftime('%X')}")
         # ❶ Iterate *once* over all known symbols in Valkey
-        for key in ENGINE.redis.scan_iter("sym_*"):
-            symbol = key[4:]                   # strip the 'sym_' prefix
+        for ticker in ENGINE.tickers:
             try:
-                ENGINE.process_price_tick(symbol)
+                ENGINE.process_price_tick(ticker)
             except Exception as exc:
-                logger.warning("ticker-loop skipped %s: %s", symbol, exc)
+                logger.warning("ticker-loop skipped %s: %s", ticker, exc)
 
         # ❷ Park the coroutine; lets FastAPI handle other requests
         await asyncio.sleep(REFRESH_S)
-
-
-# @app.on_event("startup")
-# async def _boot_loop() -> None:
-#     """
-#     FastAPI lifecycle hook.
-
-#     At application start-up we *detach* the price-tick coroutine.  The
-#     task lives as long as the Uvicorn worker lives and does **not**
-#     block the main event-loop.
-#     """
-#     asyncio.create_task(tick_loop())
