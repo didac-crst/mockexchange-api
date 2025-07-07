@@ -101,8 +101,10 @@ class ModifyTickerReq(BaseModel):
 # ───────────────────── initialise singleton engine ───────────────────── #
 
 REFRESH_S = int(os.getenv("TICK_LOOP_SEC", "10"))
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 TEST_ENV = os.getenv("TEST_ENV", "FALSE").lower() in ("1", "true", "yes")
 API_KEY = os.getenv("API_KEY", "invalid-key")  # default is invalid key
+COMMISSION = float(os.getenv("COMMISSION", "0.0"))  # 0.0% default
 
 async def verify_key(x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
@@ -111,8 +113,8 @@ async def verify_key(x_api_key: str = Header(...)):
 prod_depends = [Depends(verify_key)] if not TEST_ENV else []
 
 ENGINE = ExchangeEngine(
-    redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
-    commission= float(os.getenv("COMMISSION", "0.001")),  # 0.1% default
+    redis_url=REDIS_URL,
+    commission=COMMISSION,
 )
 
 # ───────────────────────────── FastAPI app ───────────────────────────── #
