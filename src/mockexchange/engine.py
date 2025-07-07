@@ -65,6 +65,13 @@ class ExchangeEngine:
             qty = bal.used
         bal.used -= qty
         bal.free += qty
+        # Avoid dust in used balance, only if free balance is not zero.
+        # If balance is zero, we don't care about dust and we can't assess its value.
+        if bal.free > 0:
+            used_ratio = bal.used / bal.free
+            dust = (used_ratio < 10**-10)  # avoid dust
+            if dust:  # avoid dust
+                bal.used = 0.0
         self.portfolio.set(bal)
         return qty
 
