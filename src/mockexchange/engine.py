@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import base64, hashlib, itertools, random, time
 from typing import Dict, Any, Tuple, Optional
+import os
 import redis
 import asyncio
 from .market import Market
@@ -13,7 +14,9 @@ from .orderbook import OrderBook
 from ._types import Order, AssetBalance
 from .logging_config import logger
 
-MIN_FILL = 1.0  # minimum fill factor for market orders, 1.0 = 100%
+MIN_TIME = float(os.getenv("MIN_TIME_ANSWER_ORDER_MARKET", 0))  # default is 0 second
+MAX_TIME = float(os.getenv("MAX_TIME_ANSWER_ORDER_MARKET", 1))  # default is 1 second
+MIN_FILL = float(os.getenv("MIN_MARKET_ORDER_FILL_FACTOR", 1))  # default is 1.0 (100% fill)
 
 @dataclass
 class ExchangeEngine:
@@ -75,15 +78,6 @@ class ExchangeEngine:
         self.portfolio.set(bal)
         return qty
 
-    # def _get_booked_real_amounts(self, amount: float, filled: float, price: float) -> Dict[str, float]:
-    #     """ Calculate booked and real amounts for an order. """
-    #     fee_rate = self.commission
-    #     booked_notion = amount * price
-    #     booked_fee = booked_notion * fee_rate
-    #     real_notion = filled * price
-    #     real_fee = real_notion * fee_rate
-    #     return { "booked_notion": booked_notion, "booked_fee": booked_fee, "real_notion": real_notion, "real_fee": real_fee }
-
     def _execute_buy(self,
                      base: str,
                      quote: str,
@@ -95,11 +89,6 @@ class ExchangeEngine:
         """
         Execute a buy order by:
         """
-        # _real_amounts = self._get_booked_real_amounts(amount, filled, price)
-        # booked_notion = _real_amounts["booked_notion"]
-        # booked_fee = _real_amounts["booked_fee"]
-        # real_notion = _real_amounts["real_notion"]
-        # real_fee = _real_amounts["real_fee"]
         # Release reserved quote (notion + fee)
         # and reduces cash from quote balance
         self._release(quote, booked_notion + booked_fee)
@@ -131,10 +120,6 @@ class ExchangeEngine:
         """
         Execute a sell order by:
         """
-        # _real_amounts = self._get_booked_real_amounts(amount, filled, price)
-        # booked_fee = _real_amounts["booked_fee"]
-        # real_notion = _real_amounts["real_notion"]
-        # real_fee = _real_amounts["real_fee"]
         # Release reserved base (asset)
         # and reduces asset amount in portfolio
         self._release(base, amount)
@@ -306,7 +291,8 @@ class ExchangeEngine:
 
         # ---------- market ⇒ wait & fill ----------------------------------
         if type == "market":
-            await asyncio.sleep(random.uniform(1.0, 5.0))       # dev-only latency
+            await asyncio.sleep(random.uniform(MIN_TIME, MAX_TIME))  # simulate network delay
+            # --- fetch last price from market (may be different from order price)
             price = self.market.last_price(symbol)
             # --- settle ----------------------------------------------------
             if side == "buy":
