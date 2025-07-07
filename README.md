@@ -205,7 +205,7 @@ We ship a full integration suite that spins up a **temporary Valkey** (no persis
 poetry run pytest -q
 ```  
 
-*Run one high-traffic test (1 000 concurrent market orders):*  
+*Run one high-traffic test (200 buy + 200 sell concurrent market orders):*  
 
 ```bash
 poetry run pytest src/tests/test_03_market_orders_concurrent.py -vv

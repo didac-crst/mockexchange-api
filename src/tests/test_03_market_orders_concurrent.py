@@ -22,7 +22,7 @@ def test_market_order_flow(client):
     }
 
     # ── prepare tickers & prices ────────────────────────────────
-    num_assets      = 30
+    num_assets      = 200
     notion_tx       = initial_amount / (1.2 * num_assets)
     tickers         = random.sample(get_tickers(client), num_assets)
     # limit_prices    = {"sell": 1_000_000.0, "buy": 0.000001}
