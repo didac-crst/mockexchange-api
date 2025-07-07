@@ -22,7 +22,7 @@ def test_market_order_flow(client):
     }
     # Prepare the market orders
     # and execute them
-    num_assets_to_buy = 4
+    num_assets_to_buy = 20
     notion_tx = initial_amount / (1.2 * num_assets_to_buy) # 20% less than the total amount
     tickers = random.sample(get_tickers(client), num_assets_to_buy)
     sides_list = ["buy", "sell"]

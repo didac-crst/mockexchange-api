@@ -2,6 +2,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List
 from httpx import Client
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ───────────────────────── helpers ───────────────────────── #
 
@@ -57,3 +58,26 @@ def cancel_order(client: Client, order_id: str) -> None:
     """Cancel an order by its ID."""
     # cancel the very low order
     client.post(f"/orders/{order_id}/cancel").raise_for_status()
+
+# ────────────────── concurrent order submit ────────────────── #
+
+def place_orders_parallel(client: Client,
+                          payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Fire POST /orders for every payload concurrently (one thread each).
+    Returns the list of order-JSONs in the *same order* as `payloads`.
+    """
+    def _send(body: Dict[str, Any]) -> Dict[str, Any]:
+        r = client.post("/orders", json=body)
+        r.raise_for_status()
+        return r.json()
+
+    results: Dict[int, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=len(payloads)) as pool:
+        futures = {pool.submit(_send, body): idx
+                   for idx, body in enumerate(payloads)}
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            results[idx] = fut.result()
+
+    return [results[i] for i in range(len(payloads))]
