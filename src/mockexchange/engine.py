@@ -10,7 +10,7 @@ import asyncio
 from .market import Market
 from .portfolio import Portfolio
 from .orderbook import OrderBook
-from ._types import Order, OrderSide, OrderType, OrderState, AssetBalance
+from ._types import Order, AssetBalance
 
 MIN_FILL = 1.0  # minimum fill factor for market orders, 1.0 = 100%
 
@@ -197,7 +197,7 @@ class ExchangeEngine:
         self, *,
         symbol: str, side: str,
         type: str, amount: float,
-        price: float | None = None,
+        limit_price: float | None = None,
     ) -> Dict[str, Any]:
         """
         • market  -> write OPEN order, wait 1-2 s, settle, mark CLOSED  
@@ -205,10 +205,19 @@ class ExchangeEngine:
         """
         if type not in {"market", "limit"}:
             raise ValueError("type must be market | limit")
-        if type == "limit" and price is None:
-            raise ValueError("limit orders need price")
-
-        px      = price or self.market.last_price(symbol)
+        if side not in {"buy", "sell"}:
+            raise ValueError("side must be buy | sell")
+        last = self.market.last_price(symbol)
+        px = last
+        if type == "limit":
+            if limit_price is None:
+                raise ValueError("limit orders need limit_price")
+            if side == "buy":
+                px = limit_price
+            elif side == "sell":
+                # limit_price is the minimum price to sell
+                # this is to calculate properly the notion and the fee
+                px = max(limit_price, last)
         base, quote = symbol.split("/")
         notion  = amount * px
         fee     = notion * self.commission
@@ -225,10 +234,10 @@ class ExchangeEngine:
             self._reserve(quote, fee)
 
         # ---------- write OPEN order to Valkey ----------------------------
-        _price = None if type == "market" else price
+        limit_price = None if type == "market" else limit_price
         order = Order(
             id=self._uid(), symbol=symbol, side=side, type=type,
-            amount=amount, price=_price, notion_currency=quote,
+            amount=amount, limit_price=limit_price, notion_currency=quote,
             fee_rate=self.commission, fee_currency=quote,
             status="open", filled=0.0,
             ts_post=int(time.time()*1000), ts_exec=None,
@@ -283,7 +292,7 @@ class ExchangeEngine:
         if o.side == "buy":
             # release reserved quote (notion + fee)
             released_base = 0.0
-            released_quote = o.amount * o.price + o.fee_cost
+            released_quote = o.amount * o.limit_price + o.fee_cost
             self._release(quote, released_quote)
 
         else:  # sell
@@ -309,43 +318,51 @@ class ExchangeEngine:
         ticker = self.market.fetch_ticker(symbol)
         if ticker is None:                  # malformed or missing – just skip
             return
-        last = ticker["last"]
+        ask = ticker['ask']
+        bid = ticker['bid']
+        ask_volume = float(ticker.get('ask_volume', 0.0))
+        bid_volume = float(ticker.get('bid_volume', 0.0))
         for o in self.order_book.list(status="open", symbol=symbol):
-            hit = ((o.side == "buy"  and last <= o.price) or
-                   (o.side == "sell" and last >= o.price))
-            if not hit:
-                continue
+            if o.price is None:
+                raise ValueError("Market orders cannot be processed via price ticks")
+
+            # Determine if the order hits and can be fully filled
+            is_fillable = (
+                (o.side == "buy"  and ask <= o.limit_price and o.amount <= ask_volume) or
+                (o.side == "sell" and bid >= o.limit_price and o.amount <= bid_volume)
+            )
+
+            if not is_fillable:
+                continue  # skip this order for now
 
             base, quote = symbol.split("/")
-            price = o.price
-            if price is None:  # market order
-                raise ValueError("Cannot process market orders in process_price_tick()")
 
-            # release reserved & settle
             if o.side == "buy":
                 transaction_info = self._execute_buy(
                     base=base,
                     quote=quote,
                     amount=o.amount,
-                    filled=self._filled_amount(o.amount, MIN_FILL),
-                    price=price,
+                    filled=o.amount,
+                    price=ask,
                 )
             else:  # sell
                 transaction_info = self._execute_sell(
                     base=base,
                     quote=quote,
                     amount=o.amount,
-                    filled=self._filled_amount(o.amount, MIN_FILL),
-                    price=price,
+                    filled=o.amount,
+                    price=bid,
                 )
 
+            # Finalize order
             o.status = "closed"
             o.price = transaction_info["price"]
             o.notion = transaction_info["notion"]
             o.fee_cost = transaction_info["fee"]
             o.filled = transaction_info["filled"]
-            o.ts_exec = int(time.time()*1000)
+            o.ts_exec = int(time.time() * 1000)
             self.order_book.update(o)
+
 
     # ---------------------- admin helpers ----------------------------- #
     def set_balance(self, asset: str, free: float = 0.0, used: float = 0.0) -> Dict[str, Any]:

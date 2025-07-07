@@ -9,10 +9,10 @@ from typing import Any, Dict, Optional
 import time
 import json
 
-# ─── Domain constants ────────────────────────────────────────────────────
-OrderSide  = type("OrderSide",  (), {"BUY": "buy",  "SELL": "sell"})
-OrderType  = type("OrderType",  (), {"MARKET": "market", "LIMIT": "limit"})
-OrderState = type("OrderState", (), {"OPEN": "open", "CLOSED": "closed", "CANCELED": "canceled"})
+# # ─── Domain constants ────────────────────────────────────────────────────
+# OrderSide  = type("OrderSide",  (), {"BUY": "buy",  "SELL": "sell"})
+# OrderType  = type("OrderType",  (), {"MARKET": "market", "LIMIT": "limit"})
+# OrderState = type("OrderState", (), {"OPEN": "open", "CLOSED": "closed", "CANCELED": "canceled"})
 
 # ─── Data classes ────────────────────────────────────────────────────────
 @dataclass
@@ -50,32 +50,6 @@ class AssetBalance:
             used=float(d.get("used", 0.0)),
         )
 
-# @dataclass
-# class Order:
-#     id: str
-#     symbol: str                # e.g. "BTC/USDT"
-#     side: str                  # OrderSide.BUY / SELL
-#     type: str                  # OrderType.MARKET / LIMIT
-#     amount: float
-#     price: Optional[float]     # None for market
-#     fee_rate: float
-#     fee_cost: float
-#     fee_currency: str          # typically USDT
-#     status: str = "open"
-#     filled: float = 0.0
-#     ts_post: int = field(default_factory=lambda: int(time.time() * 1000))
-#     ts_exec: Optional[int] = None               # filled when CLOSED
-
-#     # (de)serialise helpers
-#     def dumps(self) -> Dict[str, Any]:
-#         return {k: (v if not isinstance(v, set) else list(v)) for k, v in self.__dict__.items()}
-
-#     @classmethod
-#     def loads(cls, d: Dict[str, Any]) -> "Order":
-#         # tolerate older blobs that miss ts_exec
-#         if "ts_exec" not in d:
-#             d["ts_exec"] = None
-#         return cls(**d)
 
 @dataclass
 class Order:
@@ -84,13 +58,25 @@ class Order:
 
     Fields
     ------
-    id          unique, URL-safe token  
-    type        ``market`` / ``limit``  
-    side        ``buy`` / ``sell``  
-    status      ``open`` / ``closed`` / ``canceled``  
-    ts_post     millis when the order was *created*  
-    ts_exec     millis when it got *filled* (or None until then)
+    id            unique, URL-safe token  
+    symbol        trading pair (e.g., "BTC/USDT")
+    side          ``buy`` / ``sell``  
+    type          ``market`` / ``limit``  
+    amount        order size in base currency
+    status        ``open`` / ``closed`` / ``canceled``  
+    price         actual execution price (set at fill time)
+    limit_price   user-defined limit price (None for market orders)
+    filled        total amount filled so far
+    notion        total traded value (filled × price)
+    fee_cost      fee paid for the order
+    fee_rate      fee rate (e.g. 0.001 for 0.1%)
+    notion_currency  quote currency used for value (e.g. USDT)
+    fee_currency     currency in which the fee is charged
+    ts_post       millis when the order was *created*  
+    ts_exec       millis when it got *filled* (or None until then)
 
+    Notes
+    -----
     Fees are quoted in the *quote* currency (usually `USDT`).
     """
 
@@ -103,7 +89,8 @@ class Order:
     fee_currency: str
     fee_rate: float
     # Runtime-mutable fields
-    price: Optional[float] = None  # None for market orders
+    price: Optional[float] = None
+    limit_price: Optional[float] = None  # None for market orders
     status: str = "open"
     filled: float = 0.0 # until filled
     notion: float = 0.0 # until filled
