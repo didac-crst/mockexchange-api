@@ -108,22 +108,28 @@ Set the header once at *collection* level in Postman or use `curl -H "x-api-key:
 
 ---  
 
-## REST Endpoints  
+Below is an updated **REST Endpoints** section that mirrors exactly what’s in `server.py` today.
+Feel free to drop-in replace the old table in the README.
 
-| Method   | Path                       | Description                                                 |
-| -------- | -------------------------- | ----------------------------------------------------------- |
-| **GET**  | `/tickers`                 | List all symbols currently cached.                         |
-| **GET**  | `/tickers/{symbol}`        | Latest ticker for one symbol (`BTC/USDT`).                 |
-| **GET**  | `/balance`                 | Full portfolio snapshot.                                   |
-| **GET**  | `/balance/{asset}`         | Balance row for `BTC`, `USDT`, …                           |
-| **GET**  | `/orders`                  | List orders. Filters: `status`, `symbol`, `tail`.          |
-| **GET**  | `/orders/{oid}`            | Inspect single order.                                      |
-| **POST** | `/orders`                  | Create *market* or *limit* order.                          |
-| **POST** | `/orders/can_execute`      | Dry-run: is there enough balance to place the order?       |
-| **POST** | `/orders/{oid}/cancel`     | Cancel an *open* order.                                    |
-| **POST** | `/admin/edit_balance`      | Overwrite/add a balance row.                               |
-| **POST** | `/admin/fund`              | Credit `free` column of an asset.                          |
-| **POST** | `/admin/reset`             | Wipe **all** balances & orders (clean slate).              |
+## REST Endpoints
+
+| Method | Path                                           | Description                                                     |
+| ------ | ---------------------------------------------- | --------------------------------------------------------------- |
+| **GET** | `/tickers`                                    | List all symbols currently cached.                              |
+| **GET** | `/tickers/{symbol}`                           | Latest ticker for one symbol (`BTC/USDT`).                      |
+| **GET** | `/balance`                                    | Full portfolio snapshot.                                        |
+| **GET** | `/balance/{asset}`                            | Balance row for `BTC`, `USDT`, …                                |
+| **GET** | `/orders`                                     | List orders — filters: `status`, `symbol`, `tail`.              |
+| **GET** | `/orders/{oid}`                               | Inspect a single order.                                         |
+| **POST** | `/orders`                                    | Create *market* or *limit* order.                               |
+| **POST** | `/orders/can_execute`                        | Dry-run: check if there’s enough balance for the order.         |
+| **POST** | `/orders/{oid}/cancel`                       | Cancel an *open* order.                                         |
+| **PATCH** | `/admin/tickers/{symbol}/price`             | Manually patch a ticker’s last-price (plus optional volumes).   |
+| **PATCH** | `/admin/balance/{asset}`                    | Overwrite or create a balance row (`free`, `used`).             |
+| **POST** | `/admin/fund`                                | Credit an asset’s `free` column (quick top-up).                 |
+| **DELETE** | `/admin/data`                              | Wipe **all** balances *and* orders (clean slate).               |
+| **GET** | `/admin/healthz` *(not in schema)*            | Simple health probe (`{"status":"ok"}`).                        |
+
 
 ---  
 
