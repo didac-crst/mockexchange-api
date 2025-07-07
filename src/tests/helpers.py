@@ -9,6 +9,10 @@ def reset(client: Client) -> None:
     """Delete all data from the backend."""
     client.delete("/admin/data").raise_for_status()
 
+def fund(client: Client, asset: str, amount: float = 100_000) -> None:
+    """Fund the backend with a specified amount of an asset."""
+    client.post("/admin/fund", json={"asset": asset, "amount": amount}).raise_for_status()
+
 def edit_balance(client: Client, asset: str, free: float, used: float) -> None:
     """Edit the balance of a specific asset."""
     body = {"free": free, "used": used}
@@ -17,8 +21,7 @@ def edit_balance(client: Client, asset: str, free: float, used: float) -> None:
 def reset_and_fund(client: Client, asset:str, amount: float = 100_000) -> None:
     """Reset the backend and fund the asset with a specified amount."""
     reset(client)
-    # Fund the asset with the specified amount
-    client.post("/admin/fund", json={"asset": asset, "amount": amount}).raise_for_status()
+    fund(client, asset, amount)
 
 def get_tickers(client: Client) -> List[Dict[str, Any]]:
     """Get the list of tickers."""
@@ -49,3 +52,8 @@ def assert_no_locked_funds(client: Client, eps: float = 10**-8) -> None:
 def engine_latency(t: float = 0.5):
     """Sleep helper to let background tick-loop catch up."""
     time.sleep(t)
+
+def cancel_order(client: Client, order_id: str) -> None:
+    """Cancel an order by its ID."""
+    # cancel the very low order
+    client.post(f"/orders/{order_id}/cancel").raise_for_status()
