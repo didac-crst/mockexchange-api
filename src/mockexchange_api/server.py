@@ -131,6 +131,7 @@ app = FastAPI(title="MockExchange API",
                     "tryItOutEnabled": True,  # enable "Try it out" button
                 },
                 docs_url="/docs" if TEST_ENV else None,  # disable in production
+                lifespan=lifespan,
             )
 
 # Helpers: wrap calls so every endpoint is ≤ 3 lines -------------------- #
@@ -285,12 +286,13 @@ async def tick_loop() -> None:
       ``ValueError``.  We swallow it because that race is harmless.
     """
     while True:
+        logger.debug(f"[tick_loop] scanning @ {time.strftime('%X')}")
         # ❶ Iterate *once* over all known symbols in Valkey
         for key in ENGINE.redis.scan_iter("sym_*"):
             symbol = key[4:]                   # strip the 'sym_' prefix
             try:
                 ENGINE.process_price_tick(symbol)
-            except RuntimeError as exc:
+            except Exception as exc:
                 logger.warning("ticker-loop skipped %s: %s", symbol, exc)
 
         # ❷ Park the coroutine; lets FastAPI handle other requests
