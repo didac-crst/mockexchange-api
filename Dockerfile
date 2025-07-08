@@ -6,11 +6,14 @@ WORKDIR /app
 RUN pip install --no-cache-dir poetry==1.8.2           # or any pinned version
 
 # --- copy dependency spec first (better layer-caching) -------------
-# COPY pyproject.toml poetry.lock ./
-COPY pyproject.toml ./
+# If poetry.lock is existent, we copy it to ensure that the dependencies are locked.
+COPY pyproject.toml poetry.lock ./
+# If poetry.lock is not present, we skip poetry.lock copy.
+# COPY pyproject.toml ./
 
 # install runtime deps only
-RUN poetry lock --no-update 
+# If poetry.lock is not present, we will generate it with the next command.
+# RUN poetry lock --no-update 
 RUN poetry install --no-root --only main
 
 # --- copy the actual source code -----------------------------------
