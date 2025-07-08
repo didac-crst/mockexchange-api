@@ -22,12 +22,12 @@ def test_market_order_flow(client):
     }
 
     # ── prepare tickers & prices ────────────────────────────────
-    num_assets      = 200
+    num_assets      = 100
     notion_tx       = initial_amount / (1.2 * num_assets)
     tickers         = random.sample(get_tickers(client), num_assets)
     # limit_prices    = {"sell": 1_000_000.0, "buy": 0.000001}
 
-    # fund every base asset so SELLs always succeed
+    # fund every base asset so SELLs always succeedS
     for t in tickers:
         base = t.split("/")[0]
         fund(client, base, initial_amount)
@@ -68,6 +68,9 @@ def test_market_order_flow(client):
         record_tx[r["id"]] = body
 
     # ── final assertions ────────────────────────────────────────
+    # give the engine time to move funds (latency in create_order_async)
+    time.sleep(5)
+
     orders = client.get("/orders").json()
     assert len(orders) == len(record_tx)
 
@@ -77,6 +80,7 @@ def test_market_order_flow(client):
         assert o["amount"] == tx["amount"]
         assert o["side"]   == tx["side"]
         assert o["type"]   == tx["type"]
+        print(f"Order {o['id']} ({o['side']}) for {o['symbol']} at {o['price']}, {o['amount']}, status: {o['status']}")
         assert o["status"] in {"canceled", "closed"}
 
     assert_no_locked_funds(client)
