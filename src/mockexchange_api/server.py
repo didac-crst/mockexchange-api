@@ -25,16 +25,18 @@ HTTP Endpoints
 Market data
 ~~~~~~~~~~~
 GET  **/tickers**                      → list of all symbols  
-GET  **/tickers/{symbol}**             → one ticker (e.g. ``BTC/USDT``)
+GET  **/tickers/{ticker}**             → one ticker (e.g. ``BTC/USDT``)
 
 Portfolio
 ~~~~~~~~~
-GET  **/balance**                      → full account snapshot  
+GET  **/balance**                      → full account snapshot
+GET  **/balance/list**                 → list of all assets with balances
 GET  **/balance/{asset}**              → asset row only (``free``, ``used``)
 
 Orders
 ~~~~~~
-GET  **/orders**                       → list orders, optional filters  
+GET  **/orders**                       → display all orders, optional filters
+GET  **/orders/list**                  → list orders, optional filters
 GET  **/orders/{oid}**                 → single order by id  
 POST **/orders**                       → create *market* | *limit* order  
 POST **/orders/can_execute**           → dry-run balance check  
@@ -42,9 +44,11 @@ POST **/orders/{oid}/cancel**          → cancel *open* order
 
 Admin
 ~~~~~
-POST **/admin/edit_balance**           → overwrite or add a balance row  
-POST **/admin/fund**                   → credit an asset’s *free* column  
-POST **/admin/reset**                  → wipe balances **and** orders
+PATCH **/admin/tickers/{ticker}/price** → set ticker price and volumes
+PATCH **/admin/edit_balance**           → overwrite or add a balance row  
+PATCH **/admin/fund**                   → credit an asset’s *free* column  
+DELETE **/admin/data**                  → wipe balances **and** orders
+GET **/admin/health**                  → check service health
 
 Implementation notes
 --------------------
@@ -178,6 +182,10 @@ def ticker(ticker: str = "BTC/USDT"):
 def balance():
     return ENGINE.fetch_balance()
 
+@app.get("/balance/list", tags=["Portfolio"])
+def balance_list():
+    return ENGINE.fetch_balance_list()
+
 @app.get("/balance/{asset}", tags=["Portfolio"])
 def asset_balance(asset: str):
     """
@@ -199,6 +207,29 @@ def list_orders(
     ),
 ):
     return [o.__dict__ for o in ENGINE.order_book.list(status=status, symbol=symbol, tail=tail)]
+
+@app.get("/orders/list", tags=["Orders"])
+def list_orders_simple(
+    status: Literal["open", "closed", "canceled"] | None = Query(
+        None, description="Filter by order status"
+    ),
+    symbol: str | None = Query(None, description="BTC/USDT etc."),
+    tail: int | None = Query(
+        None, description="Number of orders to return"
+    ),
+):
+    """
+    List orders with optional filters.
+
+    Returns a list of order IDs.
+    """
+    orders = ENGINE.order_book.list(status=status, symbol=symbol, tail=tail)
+    orders_id_list = [o.id for o in orders]
+    output = {
+        "length": len(orders_id_list),
+        "orders": orders_id_list,
+    }
+    return output
 
 @app.get("/orders/{oid}", tags=["Orders"])
 def get_order(oid: str):
@@ -268,7 +299,7 @@ def purge_all():
     return {"status": "ok", "message": "All balances and orders have been reset."}
 
 # --- Health check ------------------------------------------------------- #
-@app.get("/admin/healthz", include_in_schema=False)
+@app.get("/admin/health", tags=["Admin"])
 def health():
     return {"status": "ok"}
 

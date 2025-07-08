@@ -230,12 +230,27 @@ class ExchangeEngine:
         return ticker_info
 
     def fetch_balance(self, asset: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Fetch a list of all asset balances in the portfolio.
+        Returns a dictionary with asset names as keys and their balances as values.
+        """
         all_balances = {a: b.to_dict() for a, b in self.portfolio.all().items()}
         if asset:
             return all_balances.get(asset, {})
         else:
             return all_balances
 
+    def fetch_balance_list(self) -> Dict[str, Any]:
+        """
+        Fetch a list of all asset balances in the portfolio.
+        Returns the length of the portfolio as a dictionary with a list of the assets names.
+        """
+        all_balances = self.portfolio.all()
+        return {
+            "length": len(all_balances),
+            "assets": list(all_balances.keys()),
+        }
+    
     # ----------------------- ORDER CREATION --------------------------- #
     async def create_order_async(
         self, *,
