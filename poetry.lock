@@ -741,6 +741,17 @@ docs = ["sphinx", "sphinx-rtd-theme", "zope.interface"]
 tests = ["coverage[toml] (==5.0.4)", "pytest (>=6.0.0,<7.0.0)"]
 
 [[package]]
+name = "pykka"
+version = "3.1.1"
+description = "Pykka is a Python implementation of the actor model"
+optional = false
+python-versions = ">=3.7.0,<4.0.0"
+files = [
+    {file = "pykka-3.1.1-py3-none-any.whl", hash = "sha256:d00de35f719afeedf8d362854d99cee6ed257663bbf7e4789344b77b73d55f28"},
+    {file = "pykka-3.1.1.tar.gz", hash = "sha256:14ce223a55e6d62de6657f9b2b129e6ac785f731eccc5e26059e5254beca3cfb"},
+]
+
+[[package]]
 name = "pytest"
 version = "8.4.1"
 description = "pytest: simple powerful testing with Python"
@@ -1316,5 +1327,5 @@ files = [
 
 [metadata]
 lock-version = "2.0"
-python-versions = ">=3.11"
-content-hash = "ab83305f9cdb71077342916a6687f7eee128803dd92cb74e1f42b3ee263471d8"
+python-versions = ">=3.11,<4.0"
+content-hash = "45f91c908f80e31721116783df085207eca0fa9f1a4fc6897f676d805d421b45"
