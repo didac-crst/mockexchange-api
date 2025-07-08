@@ -62,298 +62,239 @@ Implementation notes
 """
 from __future__ import annotations
 
-import asyncio, os
-from typing import List, Literal
-import time
-from datetime import timedelta           #  ← already needed later
-
-from fastapi import FastAPI, HTTPException, Query, Depends, Header
-from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, Field
+import asyncio, os, time
+import contextlib
 from contextlib import asynccontextmanager
+from datetime import timedelta
+from typing import List, Literal
 
-from mockexchange.engine import ExchangeEngine
+from pykka import Future 
+from fastapi import FastAPI, HTTPException, Query, Depends, Header
+from pydantic import BaseModel, Field
+
+from mockexchange.engine_actors import start_engine  # NEW import
 from mockexchange.logging_config import logger
 
-# ─────────────────────────── Pydantic models ─────────────────────────── #
-
+# ─────────────────────────── Pydantic models ────────────────────────── #
 class OrderReq(BaseModel):
     symbol: str = "BTC/USDT"
-    side:   Literal["buy", "sell"]
-    type:   Literal["market", "limit"] = "market"
+    side: Literal["buy", "sell"]
+    type: Literal["market", "limit"] = "market"
     amount: float
-    limit_price:  float | None = None      # only for limit orders
+    limit_price: float | None = None
+
 
 class BalanceReq(BaseModel):
-    free:  float = Field(1.0, ge=0)
-    used:  float = Field(0.0, ge=0)
+    free: float = Field(1.0, ge=0)
+    used: float = Field(0.0, ge=0)
+
 
 class FundReq(BaseModel):
     asset: str = "USDT"
     amount: float = Field(100000.0, gt=0)
 
+
 class ModifyTickerReq(BaseModel):
-    price:  float = Field(..., gt=0.0, description="New price for the ticker")
-    bid_volume: float = Field(
-        None,
-        description="Optional volume at the bid price; if not provided"
-    )
-    ask_volume: float = Field(
-        None,
-        description="Optional volume at the ask price; if not provided"
-    )
+    price: float = Field(..., gt=0)
+    bid_volume: float | None = None
+    ask_volume: float | None = None
 
-# ───────────────────── initialise singleton engine ───────────────────── #
 
+# ───────────────────── initialise actor engine ──────────────────────── #
 REFRESH_S = int(os.getenv("TICK_LOOP_SEC", "10"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 TEST_ENV = os.getenv("TEST_ENV", "FALSE").lower() in ("1", "true", "yes")
-API_KEY = os.getenv("API_KEY", "invalid-key")  # default is invalid key
-COMMISSION = float(os.getenv("COMMISSION", "0.0"))  # 0.0% default
-PRUNE_EVERY_SEC  = int(os.getenv("PRUNE_EVERY_SEC",  "3600"))     # run job every 1 hour
-STALE_AFTER_SEC  = int(os.getenv("STALE_AFTER_SEC", "86400"))    # delete >24 h old
+API_KEY = os.getenv("API_KEY", "invalid-key")
+COMMISSION = float(os.getenv("COMMISSION", "0.0"))
+PRUNE_EVERY_SEC = int(os.getenv("PRUNE_EVERY_SEC", "3600"))
+STALE_AFTER_SEC = int(os.getenv("STALE_AFTER_SEC", "86400"))
 
+ENGINE = start_engine(redis_url=REDIS_URL, commission=COMMISSION)
+
+# auth dependency
 async def verify_key(x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Invalid API Key")
+        raise HTTPException(403, "Invalid API Key")
 
-prod_depends = [Depends(verify_key)] if not TEST_ENV else []
 
-ENGINE = ExchangeEngine(
-    redis_url=REDIS_URL,
-    commission=COMMISSION,
-)
+prod_depends = [] if TEST_ENV else [Depends(verify_key)]
 
-# ───────────────────────────── FastAPI app ───────────────────────────── #
-
+# ───────────────────────────── FastAPI app ──────────────────────────── #
 @asynccontextmanager
 async def lifespan(app):
-    # start background task
     tick_task = asyncio.create_task(tick_loop())
     prune_task = asyncio.create_task(prune_loop())
-    yield                     # <-- application runs here
+    yield
     for t in (tick_task, prune_task):
         t.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await t
 
-app = FastAPI(title="MockExchange API",
-                version="0.2",
-                description="A mock exchange API for testing purposes",
-                swagger_ui_parameters={
-                    "tryItOutEnabled": True,  # enable "Try it out" button
-                },
-                docs_url="/docs" if TEST_ENV else None,  # disable in production
-                lifespan=lifespan,
-            )
 
-# Helpers: wrap calls so every endpoint is ≤ 3 lines -------------------- #
-def _try(fn):
-    try:
-        return fn()
-    except ValueError as exc:
-        raise HTTPException(400, detail=str(exc))
-    
-# ─────────────────────────────── Endpoints ───────────────────────────── #
+app = FastAPI(
+    title="MockExchange API",
+    version="0.3",
+    description="A mock exchange API for testing purposes",
+    docs_url=None if not TEST_ENV else "/docs",
+    lifespan=lifespan,
+    swagger_ui_parameters={
+        "tryItOutEnabled": True,  # enable "Try it out" button
+    },
+)
 
-# Default root endpoint --------------------------------------------- #
+
+# helper to unwrap futures ------------------------------------------------ #
+def _g(x):
+    # return x.get() if hasattr(x, "get") else x
+    # Only unwrap actual Pykka futures, leave plain dict/list untouched
+    return x.get() if isinstance(x, Future) else x
+
+
+# ─────────────────────────────── endpoints ───────────────────────────── #
 @app.get("/", include_in_schema=False)
-def root() -> dict[str, str]:
+def root():
     return {"service": "mockexchange-api", "version": app.version}
 
-# Market endpoints ------------------------------------------------------ #
-@app.get("/tickers", tags=["Market"])
-def all_tickers() -> List[str]:
-    """
-    List all known tickers.
 
-    Returns a list of strings, e.g. ``["BTC/USDT", "ETH/USDT"]``.
-    """
-    return ENGINE.tickers
+# market ----------------------------------------------------------------- #
+@app.get("/tickers", tags=["Market"])
+def all_tickers():
+    return ENGINE.tickers.get()
+
 
 @app.get("/tickers/{ticker:path}", tags=["Market"])
 def ticker(ticker: str = "BTC/USDT"):
-    """ Get a single ticker.
+    return _g(ENGINE.fetch_ticker(ticker))
 
-    :param ticker: Symbol, e.g. BTC/USDT, ETH/USDT.
-    """
-    return _try(lambda: ENGINE.fetch_ticker(ticker))
 
-# Balance endpoints --------------------------------------------------- #
+# portfolio -------------------------------------------------------------- #
 @app.get("/balance", tags=["Portfolio"])
 def balance():
-    return ENGINE.fetch_balance()
+    return _g(ENGINE.fetch_balance())
+
 
 @app.get("/balance/list", tags=["Portfolio"])
 def balance_list():
-    return ENGINE.fetch_balance_list()
+    return _g(ENGINE.fetch_balance_list())
+
 
 @app.get("/balance/{asset}", tags=["Portfolio"])
 def asset_balance(asset: str):
-    """
-    Get the balance of a specific asset.
+    return _g(ENGINE.fetch_balance(asset))
 
-    :param asset: Asset symbol, e.g. BTC, USDT.
-    """
-    return _try(lambda: ENGINE.fetch_balance(asset))
 
-# Orders ---------------------------------------------------------------- #
+# orders ----------------------------------------------------------------- #
 @app.get("/orders", tags=["Orders"])
 def list_orders(
-    status: Literal["open", "closed", "canceled"] | None = Query(
-        None, description="Filter by order status"
-    ),
-    symbol: str | None = Query(None, description="BTC/USDT etc."),
-    tail: int | None = Query(
-        None, description="Number of orders to return"
-    ),
+    status: Literal["open", "closed", "canceled"] | None = Query(None),
+    symbol: str | None = None,
+    side: Literal["buy", "sell"] | None = Query(None),
+    tail: int | None = None,
 ):
-    return [o.__dict__ for o in ENGINE.order_book.list(status=status, symbol=symbol, tail=tail)]
+    orders = _g(ENGINE.order_book.get().list(status=status, symbol=symbol, side=side, tail=tail))
+    return [o.__dict__ for o in orders]
+
 
 @app.get("/orders/list", tags=["Orders"])
 def list_orders_simple(
-    status: Literal["open", "closed", "canceled"] | None = Query(
-        None, description="Filter by order status"
-    ),
-    symbol: str | None = Query(None, description="BTC/USDT etc."),
-    tail: int | None = Query(
-        None, description="Number of orders to return"
-    ),
+    status: Literal["open", "closed", "canceled"] | None = Query(None),
+    symbol: str | None = None,
+    side: Literal["buy", "sell"] | None = Query(None),
+    tail: int | None = None,
 ):
-    """
-    List orders with optional filters.
+    orders = _g(ENGINE.order_book.get().list(status=status, symbol=symbol, side=side, tail=tail))
+    ids = [o.id for o in orders]
+    return {"length": len(ids), "orders": ids}
 
-    Returns a list of order IDs.
-    """
-    orders = ENGINE.order_book.list(status=status, symbol=symbol, tail=tail)
-    orders_id_list = [o.id for o in orders]
-    output = {
-        "length": len(orders_id_list),
-        "orders": orders_id_list,
-    }
-    return output
 
 @app.get("/orders/{oid}", tags=["Orders"])
 def get_order(oid: str):
-    return _try(lambda: ENGINE.order_book.get(oid))
+    return _g(ENGINE.order_book.get().get(oid))
+
 
 @app.post("/orders", tags=["Orders"], dependencies=prod_depends)
-async def new_order(req: OrderReq):
+def new_order(req: OrderReq):
+    """
+    Non-blocking for FastAPI: the call runs in the default thread-pool,
+    `.get()` blocks only that worker, not the event loop.
+    """
     try:
-        return await ENGINE.create_order_async(**req.model_dump())
+        return _g(ENGINE.create_order_async(**req.model_dump()))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
 @app.post("/orders/can_execute", tags=["Orders"])
 def dry_run(req: OrderReq):
-    # `type` is irrelevant for balance check
-    return ENGINE.can_execute(
-        symbol=req.symbol, side=req.side, amount=req.amount, price=req.price
+    return _g(
+        ENGINE.can_execute(
+            symbol=req.symbol,
+            side=req.side,
+            amount=req.amount,
+            price=req.limit_price or ENGINE.market.last_price(req.symbol).get(),
+        )
     )
+
 
 @app.post("/orders/{oid}/cancel", tags=["Orders"], dependencies=prod_depends)
 def cancel(oid: str):
-    return _try(lambda: ENGINE.cancel_order(oid))
+    return _g(ENGINE.cancel_order(oid))
 
-# Balance admin --------------------------------------------------------- #
+
+# admin ------------------------------------------------------------------ #
 @app.patch("/admin/tickers/{ticker:path}/price", tags=["Admin"], dependencies=prod_depends)
 def patch_ticker_price(ticker: str, body: ModifyTickerReq):
-    """
-    Update the last-trade price (and optional volumes) for *ticker*.
-
-    Idempotent: sending the same payload twice leaves the ticker unchanged.
-    """
-    ts = time.time() / 1000  # current time in seconds since epoch
-    notion_for_volume = 100_000 # 100k USD is the default volume
+    ts = time.time()
     price = body.price
-    bid = price
-    ask = price
-    if body.bid_volume is None or body.bid_volume <= 0:
-        body.bid_volume = notion_for_volume / bid if bid > 0 else 0.0
-    if body.ask_volume is None or body.ask_volume <= 0:
-        body.ask_volume = notion_for_volume / ask if ask > 0 else 0.0
-    data = _try(
-        lambda: ENGINE.set_ticker(
-            ticker, price, ts, bid, ask, body.bid_volume, body.ask_volume
+    bid = ask = price
+    notion = 100_000
+    body.bid_volume = body.bid_volume or notion / bid
+    body.ask_volume = body.ask_volume or notion / ask
+    data = _g(
+        ENGINE.set_ticker(
+            ticker,
+            price,
+            ts,
+            bid,
+            ask,
+            body.bid_volume,
+            body.ask_volume,
         )
     )
-    try:
-        logger.info("Manually updating ticker %s", ticker)
-        # Process the price tick to update orders and balances
-        ENGINE.process_price_tick(ticker)
-    except Exception as exc:
-        logger.warning("Failed to process price tick for %s: %s", ticker, exc)
+    ENGINE.process_price_tick(ticker).get()
     return data
+
 
 @app.patch("/admin/balance/{asset}", tags=["Admin"], dependencies=prod_depends)
 def set_balance(asset: str, req: BalanceReq):
-    """Overwrite or create a balance row (idempotent)."""
-    return _try(lambda: ENGINE.set_balance(asset, free=req.free, used=req.used))
+    return _g(ENGINE.set_balance(asset, free=req.free, used=req.used))
+
 
 @app.post("/admin/fund", tags=["Admin"], dependencies=prod_depends)
-def fund(body: FundReq):
-    return _try(lambda: ENGINE.fund_asset(body.asset, body.amount))
+def fund(req: FundReq):
+    return _g(ENGINE.fund_asset(req.asset, req.amount))
+
 
 @app.delete("/admin/data", tags=["Admin"], dependencies=prod_depends)
 def purge_all():
-    """Wipe **all** balances and orders."""
-    ENGINE.reset()
-    return {"status": "ok", "message": "All balances and orders have been reset."}
+    ENGINE.reset().get()
+    return {"status": "ok"}
 
-# --- Health check ------------------------------------------------------- #
+
 @app.get("/admin/health", tags=["Admin"])
 def health():
     return {"status": "ok"}
 
-# ------------------------------------------------------------------------- #
-async def tick_loop() -> None:
-    """
-    Background **coroutine** that keeps the order-book honest.
 
-    Steps performed forever:
-
-    1.  `SCAN` the Valkey/Redis instance for keys that start with
-        ``sym_`` (that’s how prices are stored, e.g. ``sym_BTC/USDT``).
-        The cursor-based iterator is very cheap and non-blocking.
-    2.  For each symbol call :py:meth:`ExchangeEngine.process_price_tick`.
-        The engine will:
-            • Inspect every *OPEN* limit order for *that* symbol.  
-            • If the last traded price crosses the limit, it settles the
-              funds, marks the order *closed* and updates balances.
-    3.  Sleep ``REFRESH_S`` seconds (default **10 s** – configurable via
-        the ``TICK_LOOP_SEC`` env-var) and repeat.
-
-    Notes
-    -----
-    * **Why not Pub/Sub?**  
-      The loop is dead-simple and good enough for an emulator.  
-      When you already publish real-time prices through Redis channels
-      you can swap this loop for a subscriber that calls
-      ``process_price_tick(ticker)`` on every message.
-    """
+# ─────────────────────── background tasks ────────────────────────────── #
+async def tick_loop():
     while True:
-        logger.debug(f"[tick_loop] scanning @ {time.strftime('%X')}")
-        # ❶ Iterate *once* over all known symbols in Valkey
-        for ticker in ENGINE.tickers:
-            try:
-                ENGINE.process_price_tick(ticker)
-            except Exception as exc:
-                logger.warning("ticker-loop skipped %s: %s", ticker, exc)
-
-        # ❷ Park the coroutine; lets FastAPI handle other requests
+        for t in ENGINE.tickers.get():
+            ENGINE.process_price_tick(t).get()
         await asyncio.sleep(REFRESH_S)
 
-async def prune_loop() -> None:
-    """
-    Periodically purge stale *closed / canceled* orders from Redis.
 
-    * Age limit   = STALE_AFTER_SEC   (default 24 h)
-    * Run period  = PRUNE_EVERY_SEC   (default 10 min)
-    """
+async def prune_loop():
     age = timedelta(seconds=STALE_AFTER_SEC)
     while True:
-        try:
-            removed = ENGINE.prune_orders_older_than(age=age)
-            if removed:
-                logger.info("[prune_loop] removed %d stale orders", removed)
-        except Exception as exc:
-            logger.warning("[prune_loop] failed: %s", exc)
+        ENGINE.prune_orders_older_than(age=age).get()
         await asyncio.sleep(PRUNE_EVERY_SEC)

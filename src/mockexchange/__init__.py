@@ -1,5 +1,4 @@
 from importlib.metadata import version, PackageNotFoundError
-from .engine import ExchangeEngine
 from .logging_config import logger
 from ._types import OrderSide, OrderType, OrderState, AssetBalance, Order
 
@@ -9,7 +8,8 @@ except PackageNotFoundError:  # dev-editable install
     __version__ = "0.0.0-dev"
 
 __all__ = [
-    "ExchangeEngine",
+    "start_engine",
+    "ExchangeEngineActor",
     "OrderSide",
     "OrderType",
     "OrderState",

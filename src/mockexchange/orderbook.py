@@ -70,6 +70,7 @@ class OrderBook:
         *,
         status: str | None = None,
         symbol: str | None = None,
+        side: str | None = None,
         tail: int | None = None,
     ) -> List[Order]:
         """
@@ -97,6 +98,8 @@ class OrderBook:
                 orders = [o for o in orders if o.status == status]
             if symbol:
                 orders = [o for o in orders if o.symbol == symbol]
+            if side:
+                orders = [o for o in orders if o.side == side]
 
         # chronological order
         orders.sort(key=lambda o: o.ts_post)
