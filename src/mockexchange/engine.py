@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import base64, hashlib, itertools, random, time
 from typing import Dict, Any, Tuple, Optional
 import os
+from datetime import timedelta
 import redis
 import asyncio
 from .market import Market
@@ -434,6 +435,32 @@ class ExchangeEngine:
             self.order_book.update(o)
             self._log_order(o)
 
+    # ------------------ housekeeping: purge stale orders -------------- #
+    def prune_orders_older_than(
+        self,
+        *,
+        age: timedelta,
+        statuses: tuple[str, ...] = ("closed", "canceled"),
+    ) -> int:
+        """
+        Physically delete orders whose *status* is in *statuses* **and**
+        (ts_exec or ts_post) is older than *age* ago.
+        Returns the number of orders removed.
+        """
+        now_ms     = int(time.time() * 1000)
+        cutoff_ms  = now_ms - int(age.total_seconds() * 1000)
+        removed = 0
+
+        # Cheap because we only scan the two small buckets we care about
+        for s in statuses:
+            for o in self.order_book.list(status=s):
+                ts = o.ts_exec or o.ts_post
+                if ts < cutoff_ms:
+                    self.order_book.remove(o.id)
+                    removed += 1
+        if removed:
+            logger.debug("Pruned %d stale orders (older than %s)", removed, age)
+        return removed
 
     # ---------------------- admin helpers ----------------------------- #
     def set_balance(self, asset: str, free: float = 0.0, used: float = 0.0) -> Dict[str, Any]:

@@ -1,62 +1,126 @@
 """
-Orders in a single hash `orders`  (field=id, value=json).
+Redis-backed order book with secondary indexes:
+
+* Hash  : orders          (id → json blob)             – canonical store
+* Set   : open:set        (ids)                        – every open order
+* Set   : open:{symbol}   (ids)                        – open orders per symbol
 """
 from __future__ import annotations
-import json, redis
+
+import json
+import redis
 from typing import List
 from ._types import Order
 
+
 class OrderBook:
-    """
-    Single Redis hash called ``orders`` (`<id>` ⇒ JSON).
-
-    Benefits of a single key:
-
-    * atomic writes (`HSET`)  
-    * keeps the DB namespace tidy  
-    * 1-to-1 with a SQL table (`id` PK) if you ever migrate
-    """
+    HASH_KEY      = "orders"
+    OPEN_ALL_KEY  = "open:set"
+    OPEN_SYM_KEY  = "open:{sym}"        # .format(sym=symbol)
 
     def __init__(self, conn: redis.Redis) -> None:
-        self.conn, self.key = conn, "orders"
+        self.r = conn
 
-    # Basic CRUD ---------------------------------------------------------
+    # ------------ internal helpers ------------------------------------ #
+    def _index_add(self, order: Order) -> None:
+        """Add id to the open indexes (only if order is OPEN)."""
+        if order.status != "open":
+            return
+        self.r.sadd(self.OPEN_ALL_KEY, order.id)
+        self.r.sadd(self.OPEN_SYM_KEY.format(sym=order.symbol), order.id)
+
+    def _index_rem(self, order: Order) -> None:
+        """Remove id from the open indexes."""
+        self.r.srem(self.OPEN_ALL_KEY, order.id)
+        self.r.srem(self.OPEN_SYM_KEY.format(sym=order.symbol), order.id)
+
+    # ------------ CRUD ------------------------------------------------- #
     def add(self, order: Order) -> None:
-        self.conn.hset(self.key, order.id, order.to_json())
+        self.r.hset(self.HASH_KEY, order.id, order.to_json())
+        self._index_add(order)
 
     def update(self, order: Order) -> None:
-        self.conn.hset(self.key, order.id, order.to_json())
+        """
+        Up-sert and keep indexes in sync:
+        – If status turned *open* → closed/canceled → drop from sets.
+        – If closed → *open* (unlikely) → add to sets.
+        """
+        # Fetch old status (if any) to decide how to maintain the indexes
+        old_blob = self.r.hget(self.HASH_KEY, order.id)
+        if old_blob:
+            old = Order.from_json(old_blob)
+            if old.status == "open" and order.status != "open":
+                self._index_rem(old)
+            elif old.status != "open" and order.status == "open":
+                self._index_add(order)
+        else:
+            # brand-new id
+            self._index_add(order)
+
+        self.r.hset(self.HASH_KEY, order.id, order.to_json())
 
     def get(self, oid: str) -> Order:
-        return Order.from_json(self.conn.hget(self.key, oid))
+        blob = self.r.hget(self.HASH_KEY, oid)
+        if blob is None:
+            raise KeyError(f"order {oid} not found")
+        return Order.from_json(blob)
 
     def list(
         self,
         *,
         status: str | None = None,
         symbol: str | None = None,
-        tail: int | None = None
+        tail: int | None = None,
     ) -> List[Order]:
         """
-        In-memory filter because the hash is tiny (<<10k records) in tests.
-
-        For a production-scale book move data to a proper DB and filter
-        server-side.
+        O(#open) when status=='open', else falls back to O(total).
         """
-        out: List[Order] = []
-        for _, blob in self.conn.hscan_iter(self.key):
-            o = Order.from_json(blob)
-            if status and o.status != status:
-                continue
-            if symbol and o.symbol != symbol:
-                continue
-            out.append(o)
-        out.sort(key=lambda o: o.ts_post)  # sort by timestamp
-        if tail is not None:
-            out = out[-tail:]
-        if not out:
-            return []
-        return out
+        orders: list[Order]
 
+        if status == "open":
+            # Use secondary indexes
+            if symbol:
+                ids = self.r.smembers(self.OPEN_SYM_KEY.format(sym=symbol))
+            else:
+                ids = self.r.smembers(self.OPEN_ALL_KEY)
+            if not ids:
+                return []
+            blobs = self.r.hmget(self.HASH_KEY, *ids)          # 1 round-trip
+            orders = [Order.from_json(b) for b in blobs if b]
+        else:
+            # Legacy full scan
+            orders = [
+                Order.from_json(blob)
+                for _, blob in self.r.hscan_iter(self.HASH_KEY)
+            ]
+            if status:
+                orders = [o for o in orders if o.status == status]
+            if symbol:
+                orders = [o for o in orders if o.symbol == symbol]
+
+        # chronological order
+        orders.sort(key=lambda o: o.ts_post)
+        return orders[-tail:] if (tail and len(orders) > tail) else orders
+
+    # ---------- hard delete ------------------------------------------ #
+    def remove(self, oid: str) -> None:
+        """Erase an order from storage and all indexes. Idempotent."""
+        blob = self.r.hget(self.HASH_KEY, oid)
+        if not blob:                       # already gone
+            return
+        o = Order.from_json(blob)
+        if o.status == "open":             # keep indexes consistent
+            self._index_rem(o)
+        pipe = self.r.pipeline()
+        pipe.hdel(self.HASH_KEY, oid)
+        pipe.execute()
+
+    # ---------- admin ------------------------------------------ #
     def clear(self) -> None:
-        self.conn.delete(self.key)
+        pipe = self.r.pipeline()
+        pipe.delete(self.HASH_KEY)
+        pipe.delete(self.OPEN_ALL_KEY)
+        # nuke every per-symbol set in one pass
+        for key in self.r.keys(self.OPEN_SYM_KEY.format(sym="*")):
+            pipe.delete(key)
+        pipe.execute()

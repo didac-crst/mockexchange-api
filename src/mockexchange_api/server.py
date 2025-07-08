@@ -61,6 +61,7 @@ from __future__ import annotations
 import asyncio, os
 from typing import List, Literal
 import time
+from datetime import timedelta           #  ← already needed later
 
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from fastapi.responses import RedirectResponse
@@ -105,6 +106,8 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 TEST_ENV = os.getenv("TEST_ENV", "FALSE").lower() in ("1", "true", "yes")
 API_KEY = os.getenv("API_KEY", "invalid-key")  # default is invalid key
 COMMISSION = float(os.getenv("COMMISSION", "0.0"))  # 0.0% default
+PRUNE_EVERY_SEC  = int(os.getenv("PRUNE_EVERY_SEC",  "3600"))     # run job every 1 hour
+STALE_AFTER_SEC  = int(os.getenv("STALE_AFTER_SEC", "86400"))    # delete >24 h old
 
 async def verify_key(x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
@@ -122,9 +125,11 @@ ENGINE = ExchangeEngine(
 @asynccontextmanager
 async def lifespan(app):
     # start background task
-    task = asyncio.create_task(tick_loop())
+    tick_task = asyncio.create_task(tick_loop())
+    prune_task = asyncio.create_task(prune_loop())
     yield                     # <-- application runs here
-    task.cancel()             # optional: tidy shutdown if you want
+    for t in (tick_task, prune_task):
+        t.cancel()
 
 app = FastAPI(title="MockExchange API",
                 version="0.2",
@@ -304,3 +309,20 @@ async def tick_loop() -> None:
 
         # ❷ Park the coroutine; lets FastAPI handle other requests
         await asyncio.sleep(REFRESH_S)
+
+async def prune_loop() -> None:
+    """
+    Periodically purge stale *closed / canceled* orders from Redis.
+
+    * Age limit   = STALE_AFTER_SEC   (default 24 h)
+    * Run period  = PRUNE_EVERY_SEC   (default 10 min)
+    """
+    age = timedelta(seconds=STALE_AFTER_SEC)
+    while True:
+        try:
+            removed = ENGINE.prune_orders_older_than(age=age)
+            if removed:
+                logger.info("[prune_loop] removed %d stale orders", removed)
+        except Exception as exc:
+            logger.warning("[prune_loop] failed: %s", exc)
+        await asyncio.sleep(PRUNE_EVERY_SEC)

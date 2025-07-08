@@ -57,18 +57,20 @@ then start **MockExchange** as shown above.
 
 ## Environment variables (complete)  
 
-| Var                              | Default (dev)                   | Purpose / Notes                                                                                 |
-| -------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `API_KEY`                        | `invalid-key`                  | Required header value for **every** request (`x-api-key`).                                      |
-| `REDIS_URL`                      | `redis://127.0.0.1:6379/0`     | Where Valkey lives.                                                                             |
-| `CASH_ASSET`                     | `USDT`                         | The “cash” currency used by the engine when computing PnL / fees.                               |
-| `COMMISSION`                     | `0.00075`                      | Fee rate (0.075 %).                                                                             |
-| `TEST_ENV`                       | `false`                        | `true` disables auth **and** re-enables `/docs`; tests set this to `True`.                      |
-| `TICK_LOOP_SEC`                  | `10`                           | Scan interval for price-tick loop.                                                              |
-| `MIN_TIME_ANSWER_ORDER_MARKET`   | `3`                            | Lower bound for the artificial latency (seconds) injected before a market-order fill.           |
-| `MAX_TIME_ANSWER_ORDER_MARKET`   | `5`                            | Upper bound for that artificial latency.                                                        |
-| `MIN_MARKET_ORDER_FILL_FACTOR`   | `0.95`                         | Minimum fraction of the requested amount that must be filled on a market order.                 |
-| `URL_API`                        | *(unset)*                      | Base-URL used by integration tests. Example: `https://mockexchange.your-domain.com/`.           |
+| Var | Default (dev) | Purpose / Notes |
+|-----|---------------|-----------------|
+| `API_KEY` | `invalid-key` | Required header value for **every** request (`x-api-key`). |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Where Valkey lives. |
+| `CASH_ASSET` | `USDT` | The “cash” currency used by the engine when computing PnL / fees. |
+| `COMMISSION` | `0.00075` | Fee rate (0.075 %). |
+| `TEST_ENV` | `false` | `true` disables auth **and** re-enables `/docs`; tests set this to `True`. |
+| `TICK_LOOP_SEC` | `30` | Scan interval for the background price-tick loop. |
+| `PRUNE_EVERY_SEC` | `3600` | How often the prune job runs (seconds). `0` disables automatic pruning. |
+| `STALE_AFTER_SEC` | `86400` | Age threshold for permanent deletion of *closed* / *canceled* orders (seconds). |
+| `MIN_TIME_ANSWER_ORDER_MARKET` | `3` | Lower bound for artificial latency (seconds) before a market order is filled. |
+| `MAX_TIME_ANSWER_ORDER_MARKET` | `5` | Upper bound for the artificial latency. |
+| `MIN_MARKET_ORDER_FILL_FACTOR` | `0.95` | Minimum fraction of the requested amount that must be filled on a market order. |
+| `URL_API` | *(unset)* | Base-URL used by integration tests. Example: `https://mockexchange.your-domain.com/`. |
 
 ### `.env` template  
 
@@ -219,7 +221,6 @@ poetry run pytest src/tests/test_03_market_orders_concurrent.py -vv
 
 Useful flags:  
 
-* `-n auto` with *pytest-xdist* to parallelise the suite.  
 * `--lf` to re-run only the last failures.  
 
 > **Note :** tests assume `URL_API=http://localhost:8000` — override if you point to a remote instance.  
