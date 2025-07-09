@@ -225,14 +225,12 @@ def new_order(req: OrderReq):
 
 @app.post("/orders/can_execute", tags=["Orders"])
 def dry_run(req: OrderReq):
-    return _g(
-        ENGINE.can_execute(
-            symbol=req.symbol,
-            side=req.side,
-            amount=req.amount,
-            price=req.limit_price or ENGINE.market.last_price(req.symbol).get(),
-        )
-    )
+    return _g(ENGINE.can_execute(
+        symbol=req.symbol,
+        side=req.side,
+        amount=req.amount,
+        price=req.limit_price,
+    ))
 
 
 @app.post("/orders/{oid}/cancel", tags=["Orders"], dependencies=prod_depends)
