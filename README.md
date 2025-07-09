@@ -125,8 +125,8 @@ Feel free to drop-in replace the old table in the README.
 | **GET** | `/balance/list`                               | Number of assets and list of them.                                     |
 | **GET** | `/balance/{asset}`                            | Balance row for `BTC`, `USDT`, …                                       |
 | **GET** | `/orders`                                     | List orders — filters: `status`, `symbol`, `side`, `tail`.             |
-| **GET** | `/orders/{oid}`                               | Number of orders and oid- filters: `status`, `symbol`, `side`, `tail`. |
-| **GET** | `/orders/list`                                | Inspect a single order.                                                |
+| **GET** | `/orders/list`                                | Number of orders and oid- filters: `status`, `symbol`, `side`, `tail`. |
+| **GET** | `/orders/{oid}`                               | Inspect a single order.                                                |
 | **POST** | `/orders`                                    | Create *market* or *limit* order.                                      |
 | **POST** | `/orders/can_execute`                        | Dry-run: check if there’s enough balance for the order.                |
 | **POST** | `/orders/{oid}/cancel`                       | Cancel an *open* order.                                                |
