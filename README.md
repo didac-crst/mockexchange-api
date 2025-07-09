@@ -117,22 +117,24 @@ Feel free to drop-in replace the old table in the README.
 
 ## REST Endpoints
 
-| Method | Path                                           | Description                                                     |
-| ------ | ---------------------------------------------- | --------------------------------------------------------------- |
-| **GET** | `/tickers`                                    | List all symbols currently cached.                              |
-| **GET** | `/tickers/{symbol}`                           | Latest ticker for one symbol (`BTC/USDT`).                      |
-| **GET** | `/balance`                                    | Full portfolio snapshot.                                        |
-| **GET** | `/balance/{asset}`                            | Balance row for `BTC`, `USDT`, …                                |
-| **GET** | `/orders`                                     | List orders — filters: `status`, `symbol`, `tail`.              |
-| **GET** | `/orders/{oid}`                               | Inspect a single order.                                         |
-| **POST** | `/orders`                                    | Create *market* or *limit* order.                               |
-| **POST** | `/orders/can_execute`                        | Dry-run: check if there’s enough balance for the order.         |
-| **POST** | `/orders/{oid}/cancel`                       | Cancel an *open* order.                                         |
-| **PATCH** | `/admin/tickers/{symbol}/price`             | Manually patch a ticker’s last-price (plus optional volumes).   |
-| **PATCH** | `/admin/balance/{asset}`                    | Overwrite or create a balance row (`free`, `used`).             |
-| **POST** | `/admin/fund`                                | Credit an asset’s `free` column (quick top-up).                 |
-| **DELETE** | `/admin/data`                              | Wipe **all** balances *and* orders (clean slate).               |
-| **GET** | `/admin/healthz` *(not in schema)*            | Simple health probe (`{"status":"ok"}`).                        |
+| Method | Path                                           | Description                                                            |
+| ------ | ---------------------------------------------- | ---------------------------------------------------------------------- |
+| **GET** | `/tickers`                                    | List all symbols currently cached.                                     |
+| **GET** | `/tickers/{symbol}`                           | Latest ticker for one symbol (`BTC/USDT`).                             |
+| **GET** | `/balance`                                    | Full portfolio snapshot.                                               |
+| **GET** | `/balance/list`                               | Number of assets and list of them.                                     |
+| **GET** | `/balance/{asset}`                            | Balance row for `BTC`, `USDT`, …                                       |
+| **GET** | `/orders`                                     | List orders — filters: `status`, `symbol`, `side`, `tail`.             |
+| **GET** | `/orders/list`                                | Number of orders and oid- filters: `status`, `symbol`, `side`, `tail`. |
+| **GET** | `/orders/{oid}`                               | Inspect a single order.                                                |
+| **POST** | `/orders`                                    | Create *market* or *limit* order.                                      |
+| **POST** | `/orders/can_execute`                        | Dry-run: check if there’s enough balance for the order.                |
+| **POST** | `/orders/{oid}/cancel`                       | Cancel an *open* order.                                                |
+| **PATCH** | `/admin/tickers/{symbol}/price`             | Manually patch a ticker’s last-price (plus optional volumes).          |
+| **PATCH** | `/admin/balance/{asset}`                    | Overwrite or create a balance row (`free`, `used`).                    |
+| **POST** | `/admin/fund`                                | Credit an asset’s `free` column (quick top-up).                        |
+| **DELETE** | `/admin/data`                              | Wipe **all** balances *and* orders (clean slate).                      |
+| **GET** | `/admin/healthz` *(not in schema)*            | Simple health probe (`{"status":"ok"}`).                               |
 
 
 ---  
@@ -215,7 +217,7 @@ We ship a full integration suite that spins up a **temporary Valkey** (no persis
 poetry run pytest -q
 ```  
 
-*Run one high-traffic test (200 buy + 200 sell concurrent market orders):*  
+*Run one high-traffic test (100 buy + 100 sell concurrent market orders):*  
 
 ```bash
 poetry run pytest src/tests/test_03_market_orders_concurrent.py -vv
