@@ -387,7 +387,9 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                     self.order_book.remove(o.id)
                     removed += 1
         if removed:
-            logger.debug("Pruned %d stale orders older than %s", removed, age)
+            logger.info("Pruned %d stale orders older than %s", removed, age)
+        else:
+            logger.info("No stale orders older than %s found", age)
         return removed
 
     # ----- dry-run helper --------------------------------------------------- #
