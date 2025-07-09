@@ -216,12 +216,15 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         return tick
 
     def fetch_balance(self, asset: str | None = None):
-        d = {a: b.to_dict() for a, b in self.portfolio.all().get().items()}
-        return d if asset is None else d.get(asset, {})
+        info = {k: info.to_dict() for k, info in self.portfolio.all().get().items()}
+        bal = info if asset is None else info.get(asset, {})
+        sorted_bal = {k: bal[k] for k in sorted(bal.keys())}  # sort by asset name
+        return sorted_bal
 
     def fetch_balance_list(self):
-        all_bal = self.portfolio.all().get()
-        return {"length": len(all_bal), "assets": list(all_bal.keys())}
+        all_bal = list(self.portfolio.all().get().keys())
+        all_bal.sort()  # sort by asset name
+        return {"length": len(all_bal), "assets": all_bal}
 
     def create_order(
         self, *, symbol: str, side: str, type: str, amount: float, limit_price: float | None = None
@@ -261,6 +264,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         else:
             self._reserve(base, amount)
             self._reserve(quote, fee)
+            notion = None  # no need to book notion for sell orders
 
         # open order
         order = Order(
@@ -276,7 +280,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             booked_notion=notion,
             booked_fee=fee,
             status="open",
-            filled=0.0,
+            filled=None,
             ts_post=int(time.time() * 1000),
             ts_exec=None,
         )

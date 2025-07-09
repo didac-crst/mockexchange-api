@@ -90,9 +90,9 @@ class Order:
     notion_currency: str  # usually the quote currency, e.g. USDT
     fee_currency: str
     fee_rate: float
-    booked_notion: float
     booked_fee: float
     # Runtime-mutable fields
+    booked_notion: Optional[float] = None  # until filled
     price: Optional[float] = None
     limit_price: Optional[float] = None  # None for market orders
     status: str = "open"

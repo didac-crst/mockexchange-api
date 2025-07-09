@@ -103,7 +103,9 @@ class OrderBook:
 
         # chronological order
         orders.sort(key=lambda o: o.ts_post)
-        return orders[-tail:] if (tail and len(orders) > tail) else orders
+        orders = orders[-tail:] if (tail and len(orders) > tail) else orders
+        orders = orders[::-1]  # reverse to have the latest first
+        return orders
 
     # ---------- hard delete ------------------------------------------ #
     def remove(self, oid: str) -> None:
