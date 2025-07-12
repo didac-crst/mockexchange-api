@@ -94,12 +94,12 @@ class OrderBook:
                 Order.from_json(blob)
                 for _, blob in self.r.hscan_iter(self.HASH_KEY)
             ]
-            if status:
+            if status: # Already fulfilled by if status=='open'
                 orders = [o for o in orders if o.status == status]
-            if symbol:
+            if symbol: # Already fulfilled by if status=='open' if symbol is not None
                 orders = [o for o in orders if o.symbol == symbol]
-            if side:
-                orders = [o for o in orders if o.side == side]
+        if side: # Not fulfilled by if status=='open'
+            orders = [o for o in orders if o.side == side]
 
         # chronological order
         orders.sort(key=lambda o: o.ts_post)
