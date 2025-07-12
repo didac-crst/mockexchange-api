@@ -82,7 +82,7 @@ class OrderBookActor(_BaseActor):
     def add(self, o: Order):                self.ob.add(o)
     def update(self, o: Order):             self.ob.update(o)
     def get(self, oid: str) -> Order:       return self.ob.get(oid)
-    def list(self, **kw):                   return self.ob.list(**kw)
+    def list(self, **kw) -> List[Order]:    return self.ob.list(**kw)
     def remove(self, oid: str):             self.ob.remove(oid)
     def clear(self):                        self.ob.clear()
 
