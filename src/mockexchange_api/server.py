@@ -162,9 +162,35 @@ def all_tickers():
     return ENGINE.tickers.get()
 
 
-@app.get("/tickers/{ticker:path}", tags=["Market"])
-def ticker(ticker: str = "BTC/USDT"):
-    return _g(ENGINE.fetch_ticker(ticker))
+# @app.get("/tickers/{ticker:path}", tags=["Market"])
+# def ticker(ticker: str = "BTC/USDT"):
+#     return _g(ENGINE.fetch_ticker(ticker))
+
+@app.get("/tickers/{symbols:path}", tags=["Market"])
+def ticker(symbols: str = "BTC/USDT"):
+    """Return one ticker (str) or many tickers (comma-separated list).
+
+    Examples
+    --------
+    GET /tickers/BTC/USDT
+    GET /tickers/BTC/USDT,ETH/USDT,XRP/USDT
+    """
+    # split on ',' and strip whitespace
+    requested = [s.strip() for s in symbols.split(",") if s.strip()]
+
+    # single symbol → keep old behaviour
+    if len(requested) == 1:
+        return _g(ENGINE.fetch_ticker(requested[0]))
+
+    # many symbols → aggregate, but don’t blow up if one is unknown
+    out: dict[str, dict] = {}
+    for sym in requested:
+        try:
+            out[sym] = _g(ENGINE.fetch_ticker(sym))
+        except ValueError as e:       # unknown or inactive symbol
+            out[sym] = {"error": str(e)}
+
+    return out
 
 
 # portfolio -------------------------------------------------------------- #
