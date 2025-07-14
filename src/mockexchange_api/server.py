@@ -177,19 +177,13 @@ def ticker(symbols: str = "BTC/USDT"):
     """
     # split on ',' and strip whitespace
     requested = [s.strip() for s in symbols.split(",") if s.strip()]
-
-    # single symbol → keep old behaviour
-    if len(requested) == 1:
-        return _g(ENGINE.fetch_ticker(requested[0]))
-
-    # many symbols → aggregate, but don’t blow up if one is unknown
     out: dict[str, dict] = {}
+    # many symbols → aggregate, but don’t blow up if one is unknown
     for sym in requested:
         try:
             out[sym] = _g(ENGINE.fetch_ticker(sym))
         except ValueError as e:       # unknown or inactive symbol
             out[sym] = {"error": str(e)}
-
     return out
 
 
