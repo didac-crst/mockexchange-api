@@ -34,7 +34,7 @@ def get_last_price(client: Client, symbol: str) -> float:
     """Get the last price of a ticker."""
     resp = client.get(f"/tickers/{symbol}")
     resp.raise_for_status()
-    return resp.json()["last"]
+    return resp.json()[symbol]["last"]
 
 def patch_ticker_price(client: Client, symbol: str, price: float) -> None:
     client.patch(f"/admin/tickers/{symbol}/price",
