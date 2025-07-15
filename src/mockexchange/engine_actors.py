@@ -440,9 +440,14 @@ class ExchangeEngineActor(pykka.ThreadingActor):
     ):
         if symbol not in self.market.tickers.get():
             raise ValueError(f"Ticker {symbol} does not exist")
-        return self.market.set_last_price(
+
+        # 1️⃣ fire‑and‑forget the price update
+        self.market.set_last_price(
             symbol, price, ts, bid, ask, bid_volume, ask_volume
-        ).get()
+        ).get()           # we still wait here to ensure the write has finished
+
+        # 2️⃣ read the now‑current ticker snapshot and hand it back
+        return self.market.fetch_ticker(symbol).get()
 
     def reset(self):
         self.portfolio.clear()

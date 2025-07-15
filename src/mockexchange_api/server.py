@@ -264,11 +264,10 @@ def patch_ticker_price(ticker: str, body: ModifyTickerReq):
     ts = time.time()
     price = body.price
     bid = ask = price
-    notion = 100_000
-    body.bid_volume = body.bid_volume or notion / bid
-    body.ask_volume = body.ask_volume or notion / ask
-    data = _g(
-        ENGINE.set_ticker(
+    dummy_notion = 10**12  # just a large number to ensure liquid volumes
+    body.bid_volume = body.bid_volume or dummy_notion / bid
+    body.ask_volume = body.ask_volume or dummy_notion / ask
+    data = _g(ENGINE.set_ticker(
             ticker,
             price,
             ts,
@@ -276,9 +275,8 @@ def patch_ticker_price(ticker: str, body: ModifyTickerReq):
             ask,
             body.bid_volume,
             body.ask_volume,
-        )
-    )
-    ENGINE.process_price_tick(ticker).get()
+        ))
+    _g(ENGINE.process_price_tick(ticker))
     return data
 
 
