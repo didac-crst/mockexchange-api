@@ -69,7 +69,7 @@ then start **MockExchange** as shown above.
 | `STALE_AFTER_SEC` | `86400` | Age threshold for permanent deletion of *closed* / *canceled* orders (seconds). |
 | `MIN_TIME_ANSWER_ORDER_MARKET` | `3` | Lower bound for artificial latency (seconds) before a market order is filled. |
 | `MAX_TIME_ANSWER_ORDER_MARKET` | `5` | Upper bound for the artificial latency. |
-| `MIN_MARKET_ORDER_FILL_FACTOR` | `0.95` | Minimum fraction of the requested amount that must be filled on a market order. |
+| `SIGMA_FILL_MARKET_ORDER` | `0.1` | Standard‑deviation parameter that controls the random partial‑fill ratio for simulated market orders – higher values mean more variability and a greater chance of partial fills. |
 | `URL_API` | *(unset)* | Base-URL used by integration tests. Example: `https://mockexchange.your-domain.com/`. |
 
 ### `.env` template  
@@ -92,7 +92,7 @@ PRUNE_EVERY_SEC=3600
 STALE_AFTER_SEC=86400
 MIN_TIME_ANSWER_ORDER_MARKET=3
 MAX_TIME_ANSWER_ORDER_MARKET=5
-MIN_MARKET_ORDER_FILL_FACTOR=0.95
+SIGMA_FILL_MARKET_ORDER=0.1
 URL_API=https://mockexchange.your-domain.com/
 ```  
 

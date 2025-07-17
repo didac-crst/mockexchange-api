@@ -24,7 +24,7 @@ logging.getLogger("pykka").setLevel(logging.WARNING)
 # ────────────────────────────────────────────
 MIN_TIME = float(os.getenv("MIN_TIME_ANSWER_ORDER_MARKET", 0))
 MAX_TIME = float(os.getenv("MAX_TIME_ANSWER_ORDER_MARKET", 1))
-MIN_FILL = float(os.getenv("MIN_MARKET_ORDER_FILL_FACTOR", 1))
+SIGMA_FILL = float(os.getenv("SIGMA_FILL_MARKET_ORDER", 0.1))
 # ────────────────────────────────────────────
 
 
@@ -136,8 +136,19 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         return qty
 
     @staticmethod
-    def _filled_amount(amount: float, min_fill: float = 1.0) -> float:
-        return amount * random.uniform(min_fill, 1.0)
+    def _filled_amount(amount: float, sigma: float = 0.1) -> float:
+        """
+        Simulate a random fill amount based on a mean and a delta.
+        Half of the time it will fill exactly the amount requested,
+        the other half it will fill less, but never more than requested.
+        """
+        mean = 1.0
+        random_number = random.gauss(mean, sigma)
+        if random_number < 0:
+            random_number = 0.0
+        if random_number > mean:
+            random_number = mean
+        return amount * random_number
 
     # ---------- logging ------------------------------------------------ #
     def _log_order(self, order: Order) -> None:
@@ -362,7 +373,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                 amount=o.amount,
                 booked_notion=o.booked_notion,
                 booked_fee=o.booked_fee,
-                filled=self._filled_amount(o.amount, MIN_FILL),
+                filled=self._filled_amount(o.amount, SIGMA_FILL),
                 price=ask if o.side == "buy" else bid,
             )
 
@@ -473,7 +484,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                 amount=o.amount,
                 booked_notion=o.booked_notion,
                 booked_fee=o.booked_fee,
-                filled=self._filled_amount(o.amount, MIN_FILL),
+                filled=self._filled_amount(o.amount, SIGMA_FILL),
                 price=price,
             )
             o.status = "closed"
