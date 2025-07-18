@@ -255,7 +255,11 @@ def dry_run(req: OrderReq):
 
 @app.post("/orders/{oid}/cancel", tags=["Orders"], dependencies=prod_depends)
 def cancel(oid: str):
-    return _g(ENGINE.cancel_order(oid))
+    try:
+        return _g(ENGINE.cancel_order(oid))
+    except ValueError as e:
+        # 400 = client made a bad request (nothing wrong with the server)
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # admin ------------------------------------------------------------------ #
