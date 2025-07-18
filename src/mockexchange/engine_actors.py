@@ -241,6 +241,12 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         self, *, symbol: str, side: str, type: str, amount: float, limit_price: float | None = None
     ):
         # validation
+        if symbol not in self.market.tickers.get():
+            raise ValueError(f"Ticker {symbol} does not exist")
+        if amount <= 0:
+            raise ValueError("amount must be > 0")
+        if limit_price is not None and limit_price <= 0:
+            raise ValueError("limit_price must be > 0 if specified")
         if type not in {"market", "limit"}:
             raise ValueError("type must be market | limit")
         if side not in {"buy", "sell"}:
