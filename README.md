@@ -173,15 +173,26 @@ A background coroutine scans Valkey for keys matching `sym_*`, feeds the latest 
 
 ### Feeding live prices  
 
-MockExchange is agnostic about **where** prices come from; it simply expects a hash per symbol with fields `price` and `timestamp`, e.g.  
-`HSET sym_BTC/USDT price 58640.13 timestamp 1751893262`.  
+MockExchange is agnostic about **where** prices come from; it simply expects a hash per symbol with these fields:
+
+  | field       | example value |
+  |-------------|---------------|
+  | `price`     | `117800.01`   |
+  | `timestamp` | `1752853159.996` |
+  | `bid`       | `117800.00`   |
+  | `ask`       | `117800.01`   |
+  | `bidVolume` | `0.05537`     |
+  | `askVolume` | `8.91369`     |
+  | `symbol`    | `BTC/USDT`    |
+
+`HSET sym_BTC/USDT price 117800.01 timestamp 752853159.996 bid ...`
 
 The reference feeder we use in production is a 40-line script that:  
 
 1. Pulls fresh tickers from **Binance** via **CCXT** every 10 s.  
-2. Writes each one to Valkey under `sym_{ticker}`.  
+2. For each symbol it writes a Valkey hash at the key `sym_<SYMBOL>`.
 
-Any mechanism that follows the same convention works (Kafka consumer, WebSocket stream, another exchange, etc.).  Check `examples/binance_feeder.py` for a concrete implementation.  
+Any mechanism that follows the same convention works (Kafka consumer, WebSocket stream, another exchange, etc.).
 
 ---  
 
