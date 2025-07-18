@@ -42,67 +42,103 @@ class DummyClient(SimpleNamespace):
 # ——— helper: run cli.main() with fake argv ———
 #
 def run_cli(monkeypatch, capsys, fake_client, argv):
-    """
-    monkeypatch: pytest fixture
-    capsys:      pytest fixture
-    fake_client: DummyClient instance
-    argv:        list[str] e.g. ["balance"]
-    """
-    # import *after* patching so cli.py picks up the monkey‑patched symbols
-    import importlib
+    import importlib, inspect, sys
+
     cli = importlib.import_module("mockexchange_api.cli")
-
-    # replace the real client with the fake
     monkeypatch.setattr(cli, "client", fake_client, raising=True)
-
-    # simulate `python -m mockexchange_api.cli ...`
     monkeypatch.setattr(sys, "argv", ["mockx", *argv])
 
-    # capture SystemExit (argparse always calls it)
-    with pytest.raises(SystemExit) as exc:
-        cli.main()
+    try:
+        cli.main()              # ← returns None on success
+        code = 0
+    except SystemExit as exc:    # ← only raised on error
+        code = exc.code
 
     stdout = capsys.readouterr().out
-    return exc.value.code, stdout, fake_client.calls
+    return code, stdout, fake_client.calls
 
 
-# ————————————————————————————————————————————————————————————————
-#                           Tests
-# ————————————————————————————————————————————————————————————————
-def test_balance_ok(monkeypatch, capsys):
-    data = {"USDT": {"free": 100}}
-    resp = httpx.Response(200, json=data)
-    client = DummyClient([resp])
+# # ————————————————————————————————————————————————————————————————
+# #                           Tests
+# # ————————————————————————————————————————————————————————————————
+# def test_balance_ok(monkeypatch, capsys):
+#     data = {"USDT": {"free": 100}}
+#     resp = httpx.Response(200, json=data)
+#     client = DummyClient([resp])
 
-    code, out, calls = run_cli(monkeypatch, capsys, client, ["balance"])
+#     code, out, calls = run_cli(monkeypatch, capsys, client, ["balance"])
+
+#     assert code == 0
+#     assert json.loads(out) == data
+#     assert calls == [("GET", "/balance", {"params": {}})]
+
+
+# def test_ticker_routes_correctly(monkeypatch, capsys):
+#     resp = httpx.Response(200, json={"dummy": True})
+#     client = DummyClient([resp])
+
+#     _, _, calls = run_cli(monkeypatch, capsys, client, ["ticker", "BTC/USDT"])
+
+#     method, path, payload = calls[0]
+#     assert (method, path) == ("GET", "/tickers/BTC/USDT")
+#     # no empty query params were sent
+#     assert payload == {"params": {}}
+
+
+# def test_cancel_closed_order_shows_error(monkeypatch, capsys):
+#     # server replies 400 with FastAPI JSON body
+#     error_body = {"detail": "Only *open* orders can be canceled"}
+#     resp = httpx.Response(400, json=error_body)
+#     client = DummyClient([resp])
+
+#     code, out, _ = run_cli(
+#         monkeypatch, capsys, client, ["cancel", "abc123"]
+#     )
+
+#     # our CLI exits with the human‑readable message, not with a traceback
+#     assert code == "HTTP 400: Only *open* orders can be canceled"
+#     assert out == ""  # nothing printed to stdout
+
+cases = [
+    # cmd            argv                       method  path                         body/query
+    ("balance",      ["balance"],               "GET",  "/balance",                  {}),
+    ("ticker",       ["ticker", "BTC/USDT"],    "GET",  "/tickers/BTC/USDT",         {}),
+    ("order",        ["order", "BTC/USDT", "buy", "1"], "POST", "/orders",
+                     {"symbol": "BTC/USDT", "side": "buy", "type": "market",
+                      "amount": 1.0, "limit_price": None}),
+    ("orders",       ["orders"],                "GET",  "/orders",                   {}),
+    ("fund",         ["fund", "USDT", "100"],   "POST", "/admin/fund",
+                     {"asset": "USDT", "amount": 100.0}),
+    ("order-get",    ["order-get", "oid123"],   "GET",  "/orders/oid123",            {}),
+    ("orders-simple",["orders-simple"],         "GET",  "/orders/list",              {}),
+    ("can-exec",     ["can-exec", "BTC/USDT", "buy", "1"],
+                                                "POST", "/orders/can_execute",
+                     {"symbol": "BTC/USDT", "side": "buy", "amount": 1.0,
+                      "limit_price": None, "type": "market"}),
+    ("set-balance",  ["set-balance", "DOT", "--free", "10"],
+                                                "PATCH","/admin/balance/DOT",
+                     {"free": 10.0, "used": 0.0}),
+    ("set-price",    ["set-price", "BTC/USDT", "30000"],
+                                                "PATCH","/admin/tickers/BTC/USDT/price",
+                     {"price": 30000.0, "bid_volume": None, "ask_volume": None}),
+    ("reset-data",   ["reset-data"],            "DELETE","/admin/data",              {}),
+    ("health",       ["health"],                "GET",  "/admin/health",             {}),
+]
+
+@pytest.mark.parametrize("name,argv,method,path,expected", cases)
+def test_cli_routes(name, argv, method, path, expected,
+                    monkeypatch, capsys):
+    # stub HTTP 200 for every call
+    fake = DummyClient([httpx.Response(200, json={"ok": True})])
+    code, _, calls = run_cli(monkeypatch, capsys, fake, argv)
 
     assert code == 0
-    assert json.loads(out) == data
-    assert calls == [("GET", "/balance", {"params": {}})]
 
+    if method in {"POST", "PATCH"}:
+        want = {"json": expected}
+    elif method == "GET":
+        want = {"params": expected}
+    elif method == "DELETE":
+        want = {}
 
-def test_ticker_routes_correctly(monkeypatch, capsys):
-    resp = httpx.Response(200, json={"dummy": True})
-    client = DummyClient([resp])
-
-    _, _, calls = run_cli(monkeypatch, capsys, client, ["ticker", "BTC/USDT"])
-
-    method, path, payload = calls[0]
-    assert (method, path) == ("GET", "/tickers/BTC/USDT")
-    # no empty query params were sent
-    assert payload == {"params": {}}
-
-
-def test_cancel_closed_order_shows_error(monkeypatch, capsys):
-    # server replies 400 with FastAPI JSON body
-    error_body = {"detail": "Only *open* orders can be canceled"}
-    resp = httpx.Response(400, json=error_body)
-    client = DummyClient([resp])
-
-    code, out, _ = run_cli(
-        monkeypatch, capsys, client, ["cancel", "abc123"]
-    )
-
-    # our CLI exits with the human‑readable message, not with a traceback
-    assert code == "HTTP 400: Only *open* orders can be canceled"
-    assert out == ""  # nothing printed to stdout
+    assert calls == [(method, path, want)]
