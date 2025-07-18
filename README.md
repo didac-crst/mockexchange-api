@@ -59,6 +59,8 @@ then start **MockExchange** as shown above.
 
 | Var | Default (dev) | Purpose / Notes |
 |-----|---------------|-----------------|
+| `API_URL`	| `http://localhost:8000` |	Base‑URL the CLI (and integration tests) call. |
+| `API_TIMEOUT_SEC` |	`10` | Per‑request timeout used by the CLI’s httpx client. |
 | `API_KEY` | `invalid-key` | Required header value for **every** request (`x-api-key`). |
 | `REDIS_URL` | `redis://127.0.0.1:6379/0` | Where Valkey lives. |
 | `CASH_ASSET` | `USDT` | The “cash” currency used by the engine when computing PnL / fees. |
@@ -82,6 +84,8 @@ cp .env.example .env
 
 ```dotenv
 # .env
+API_URL=http://localhost:8000
+API_TIMEOUT_SEC=10
 API_KEY="your-super-secret-key"
 REDIS_URL=redis://127.0.0.1:6379/0
 CASH_ASSET=USDT
@@ -197,15 +201,61 @@ Any mechanism that follows the same convention works (Kafka consumer, WebSocket 
     git clone https://github.com/your-org/mockexchange-api.git
     cd mockexchange-api
     poetry install --with dev      # core + tests + linters
-    ```  
-
-3. Smoke-test the CLI:  
-
-    ```bash
-    poetry run mockexchange-cli balance
-    ```  
+    ```
 
 ---  
+
+## Using the CLI (`mockx`)
+
+The image (and any `pip/poetry` install) ships a thin command‑line helper called **`mockx`**.
+It talks to the API over HTTP, so you can run it from **your host** or **inside the container** as long as:
+
+* `API_URL` points at the FastAPI service (default `http://localhost:8000`)
+* `API_KEY` is set when `TEST_ENV=false`
+* `API_TIMEOUT_SEC` sets the per‑request timeout (default `10` s)
+
+```bash
+# host shell – example
+export API_URL=http://localhost:8000
+export API_KEY=my-secret
+
+mockx balance                 # full portfolio
+mockx ticker BTC/USDT         # latest price snapshot
+```
+
+### Command reference
+
+| CLI | Maps to REST | What it does |
+|-----|--------------|--------------|
+| `mockx balance` | `GET /balance` | Dump every asset row. |
+| `mockx ticker <SYM>` | `GET /tickers/<SYM>` | Latest ticker (comma list allowed). |
+| `mockx order <SYM> <buy\|sell> <qty> [--type limit] [--price P]` | `POST /orders` | Create market/limit order. |
+| `mockx cancel <OID>` | `POST /orders/{oid}/cancel` | Cancel an **open** order. |
+| `mockx orders [...]` | `GET /orders` | List orders (`--status`, `--symbol`, …). |
+| `mockx order-get <OID>` | `GET /orders/{oid}` | Inspect one order. |
+| `mockx orders-simple` | `GET /orders/list` | Count + OID list. |
+| `mockx can-exec <SYM> <buy\|sell> <qty> [--price P]` | `POST /orders/can_execute` | Dry‑run balance check. |
+| `mockx fund <ASSET> <AMOUNT>` | `POST /admin/fund` | Quick top‑up (admin). |
+| `mockx set-balance <ASSET> --free F --used U` | `PATCH /admin/balance/{asset}` | Overwrite a balance row. |
+| `mockx set-price <SYM> <P> [--bid-volume V] [--ask-volume V]` | `PATCH /admin/tickers/{sym}/price` | Force last‑price & volumes. |
+| `mockx reset-data` | `DELETE /admin/data` | Wipe **all** balances + orders. |
+| `mockx health` | `GET /admin/health` | Simple health probe. |
+
+> `mockx -h` and `mockx <sub‑command> -h` print the same information on the CLI.
+
+### Quick demo inside the running container
+
+```bash
+docker exec -it mockexchange-api bash
+
+# Inside the docker
+mockx reset-data
+mockx fund USDT 100000
+mockx order BTC/USDT buy 0.05
+mockx orders --status closed
+```
+
+---
 
 ## Running the test-suite 🧪  
 
@@ -258,7 +308,7 @@ mockexchange-api/
 │   └── tests/                   ← Pytest suite (unit + integration)
 │       ├── conftest.py
 │       ├── helpers.py
-│       └── test_*               ← 01-05 cover reset → cancel flow
+│       └── test_*               ← 01-05 & cover reset → cancel flow; also cli
 └── LICENSE
 ```  
 
@@ -273,6 +323,15 @@ mockexchange-api/
 * Commission is read from `COMMISSION` env (default `0.00075` = 0.075 %).  
 * Code style: **Black** & **Ruff** (`poetry run ruff check .`) — run `ruff format .` to auto-fix.  
 * Static typing: **MyPy** (`poetry run mypy src/mockexchange`).  
+
+---
+
+## Front‑end dashboard
+
+If you prefer a GUI, check the companion repo **mockexchange‑deck**  
+<https://github.com/didac-crst/mockexchange-deck>.
+
+It’s a single‑user Streamlit dashboard that shows your balances and open orders.
 
 ---  
 
