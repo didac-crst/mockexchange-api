@@ -13,7 +13,6 @@ COPY pyproject.toml poetry.lock ./
 
 # install runtime deps only
 # If poetry.lock is not present, we will generate it with the next command.
-# RUN poetry lock --no-update 
 RUN poetry install --no-root --only main
 
 # --- copy the actual source code -----------------------------------
