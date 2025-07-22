@@ -5,16 +5,16 @@ Non-blocking, single-threaded semantics inside each actor.
 from __future__ import annotations
 
 import itertools, os, random, threading, time
+import base64, hashlib
 from datetime import timedelta
 from typing import Dict, List
-import base64, hashlib, itertools, random, time
 
 import pykka
 import logging
 import redis
 
 from .market import Market
-from .orderbook import OrderBook
+from .orderbook import OrderBook, OPEN_STATUS, CLOSED_STATUS
 from .portfolio import Portfolio
 from ._types import AssetBalance, Order
 from .logging_config import logger
@@ -162,9 +162,14 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             f"Order {order.id} [{order.type}] "
             f"{order.side.upper()} {order.amount:.8f} {asset} at {px_str}, fee {fee_str}"
         )
-        status_prefix = {"open": "Created", "closed": "Executed", "canceled": "Canceled"}[
-            order.status
-        ]
+        status_prefix = {"new": "Created",
+                         "partially_filled": "Partially Filled",
+                         "filled": "Executed",
+                         "canceled": "Canceled",
+                         "partially_canceled": "Partially Canceled",
+                         "expired": "Expired",
+                         "rejected": "Rejected",
+                         }[order.status if isinstance(order.status, str) else order.status.value]
         logger.info("%s %s", status_prefix, base_msg)
 
     # ---------- core balance moves ------------------------------------ #
@@ -174,22 +179,27 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         base: str,
         quote: str,
         amount: float,
-        booked_notion: float,
-        booked_fee: float,
-        filled: float,
+        prev_filled: float,
+        prev_notion: float,
+        prev_fee: float,
         price: float,
     ) -> Dict[str, float]:
-        self._release(quote, booked_notion + booked_fee)
+        delta_filled = self._filled_amount(amount - prev_filled, SIGMA_FILL)
+        filled_notion = delta_filled * price
+        filled_fee = filled_notion * self.commission
+        self._release(quote, filled_notion + filled_fee)
         cash = self.portfolio.get(quote).get()
-        notion = filled * price
-        fee = notion * self.commission
-        cash.free -= notion + fee
+        cash.free -= (filled_notion + filled_fee)
         self.portfolio.set(cash)
 
         asset = self.portfolio.get(base).get()
-        asset.free += filled
+        asset.free += delta_filled
         self.portfolio.set(asset)
-        return {"price": price, "notion": notion, "filled": filled, "fee": fee}
+        total_notion = prev_notion + filled_notion
+        total_fee = prev_fee + filled_fee
+        total_filled = prev_filled + delta_filled
+        new_price = total_notion / total_filled if total_filled > 0 else price
+        return {"price": new_price, "notion": total_notion, "filled": total_filled, "fee": total_fee}
 
     def _execute_sell(
         self,
@@ -197,23 +207,28 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         base: str,
         quote: str,
         amount: float,
-        booked_notion: float,
-        booked_fee: float,
-        filled: float,
+        prev_filled: float,
+        prev_notion: float,
+        prev_fee: float,
         price: float,
     ) -> Dict[str, float]:
-        self._release(base, amount)
+        delta_filled = self._filled_amount(amount - prev_filled, SIGMA_FILL)
+        filled_notion = delta_filled * price
+        filled_fee = filled_notion * self.commission
+        self._release(base, delta_filled)
         asset = self.portfolio.get(base).get()
-        asset.free -= filled
+        asset.free -= delta_filled
         self.portfolio.set(asset)
 
-        self._release(quote, booked_fee)
+        self._release(quote, filled_fee)
         cash = self.portfolio.get(quote).get()
-        notion = filled * price
-        fee = notion * self.commission
-        cash.free += notion - fee
+        cash.free += (filled_notion - filled_fee)
         self.portfolio.set(cash)
-        return {"price": price, "notion": notion, "filled": filled, "fee": fee}
+        total_notion = prev_notion + filled_notion
+        total_fee = prev_fee + filled_fee
+        total_filled = prev_filled + delta_filled
+        new_price = total_notion / total_filled if total_filled > 0 else price
+        return {"price": new_price, "notion": total_notion, "filled": total_filled, "fee": total_fee}
 
     # ---------- public API  ------------------------------------------- #
     @property
@@ -245,10 +260,10 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             raise ValueError(f"Ticker {symbol} does not exist")
         if amount <= 0:
             raise ValueError("amount must be > 0")
-        if limit_price is not None and limit_price <= 0:
-            raise ValueError("limit_price must be > 0 if specified")
         if type not in {"market", "limit"}:
             raise ValueError("type must be market | limit")
+        if type == "limit" and (limit_price is None or limit_price < 0):
+            raise ValueError("limit_price must be ≥ 0 for limit orders")
         if side not in {"buy", "sell"}:
             raise ValueError("side must be buy | sell")
 
@@ -281,9 +296,10 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         else:
             self._reserve(base, amount)
             self._reserve(quote, fee)
-            notion = None  # no need to book notion for sell orders
+            notion = 0.0 # no notion booked for sell orders
 
         # open order
+        ts = int(time.time() * 1000)
         order = Order(
             id=self._uid(),
             symbol=symbol,
@@ -296,9 +312,10 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             fee_currency=quote,
             booked_notion=notion,
             booked_fee=fee,
-            status="open",
-            filled=None,
-            ts_post=int(time.time() * 1000),
+            status="new",
+            filled=0.0,
+            ts_create=ts,
+            ts_update=ts,
             ts_exec=None,
         )
         self.order_book.add(order)
@@ -321,27 +338,25 @@ class ExchangeEngineActor(pykka.ThreadingActor):
 
     def cancel_order(self, oid: str):
         o = self.order_book.get(oid).get()
-        if o.status != "open":
+        if o.status not in OPEN_STATUS:
             raise ValueError("Only *open* orders can be canceled")
-
         base, quote = o.symbol.split("/")
         px = o.limit_price or self.market.last_price(o.symbol).get()
 
         if o.side == "buy":
+            remaining_notion = (o.amount - o.filled) * px
+            remaining_fee    = remaining_notion * o.fee_rate
+            released_quote   = remaining_notion + remaining_fee
+            self._release(quote, released_quote)
             released_base = 0.0
-            notion = o.amount * px
-            fee = notion * o.fee_rate
-            released_quote = notion + fee
-            self._release(quote, released_quote)
         else:
-            released_base = o.amount
-            fee = o.amount * px * o.fee_rate
-            released_quote = fee
-            self._release(base, released_base)
-            self._release(quote, released_quote)
-
-        o.status = "canceled"
-        o.ts_exec = int(time.time() * 1000)
+            remaining_base = o.amount - o.filled
+            remaining_fee  = remaining_base * px * o.fee_rate
+            released_base  = self._release(base, remaining_base)
+            released_quote = self._release(quote, remaining_fee)
+        o.status = "canceled" if o.filled == 0 else "partially_canceled"
+        ts = int(time.time() * 1000)
+        o.ts_exec = o.ts_update = ts
         self.order_book.update(o)
         self._log_order(o)
         return {"canceled_order": o.__dict__, "freed": {base: released_base, quote: released_quote}}
@@ -356,15 +371,23 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         ask, bid = ticker["ask"], ticker["bid"]
         ask_vol = float(ticker.get("ask_volume", 0))
         bid_vol = float(ticker.get("bid_volume", 0))
+        new_orders = self.order_book.list(status="new", symbol=symbol).get()
+        partially_filled_orders = self.order_book.list(status="partially_filled", symbol=symbol).get()
+        open_orders = new_orders + partially_filled_orders
+        for o in open_orders:
+            if o.type == "market":
+                fillable = (
+                    (o.side == "buy" and o.amount <= ask_vol)
+                    or (o.side == "sell" and o.amount <= bid_vol)
+                )
+            elif o.limit_price is None:
+                pass # should not happen, but just in case
 
-        for o in self.order_book.list(status="open", symbol=symbol).get():
-            if o.type == "market" or o.limit_price is None:
-                continue
-
-            fillable = (
-                (o.side == "buy" and ask <= o.limit_price and o.amount <= ask_vol)
-                or (o.side == "sell" and bid >= o.limit_price and o.amount <= bid_vol)
-            )
+            else:
+                fillable = (
+                    (o.side == "buy" and ask <= o.limit_price and o.amount <= ask_vol)
+                    or (o.side == "sell" and bid >= o.limit_price and o.amount <= bid_vol)
+                )
             if not fillable:
                 continue
 
@@ -377,18 +400,25 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                 base=base,
                 quote=quote,
                 amount=o.amount,
-                booked_notion=o.booked_notion,
-                booked_fee=o.booked_fee,
-                filled=self._filled_amount(o.amount, SIGMA_FILL),
+                prev_filled=o.filled,
+                prev_notion=o.notion,
+                prev_fee=o.fee_cost,
                 price=ask if o.side == "buy" else bid,
             )
+            ts = int(time.time() * 1000)
+            o.ts_update = ts
 
-            o.status = "closed"
-            o.price = tx["price"]
-            o.filled = tx["filled"]
-            o.notion = tx["notion"]
+            o.price   = tx["price"]
+            o.filled  = tx["filled"]
+            o.notion  = tx["notion"]
             o.fee_cost = tx["fee"]
-            o.ts_exec = int(time.time() * 1000)
+
+            full = o.filled >= o.amount - 1e-12
+            if full:
+                o.status = "filled"
+                o.ts_exec = ts
+            else:
+                o.status = "partially_filled"
             self.order_book.update(o)
             self._log_order(o)
 
@@ -396,17 +426,18 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         self,
         *,
         age: timedelta,
-        statuses: tuple[str, ...] = ("closed", "canceled"),
+        statuses: tuple[str, ...] = CLOSED_STATUS
     ) -> int:
         now_ms = int(time.time() * 1000)
         cutoff = now_ms - int(age.total_seconds() * 1000)
         removed = 0
         for s in statuses:
             for o in self.order_book.list(status=s).get():
-                ts = o.ts_exec or o.ts_post
-                if ts < cutoff:
-                    self.order_book.remove(o.id)
-                    removed += 1
+                if o.status in CLOSED_STATUS:
+                    ts = o.ts_exec
+                    if ts < cutoff:
+                        self.order_book.remove(o.id)
+                        removed += 1
         if removed:
             logger.info("Pruned %d stale orders older than %s", removed, age)
         else:
@@ -476,7 +507,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         if msg.get("cmd") == "_settle_market":
             oid = msg["oid"]
             o = self.order_book.get(oid).get()
-            if o.status != "open":
+            if o.status not in OPEN_STATUS:
                 return
             base, quote = o.symbol.split("/")
             price = self.market.last_price(o.symbol).get()
@@ -488,17 +519,25 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                 base=base,
                 quote=quote,
                 amount=o.amount,
-                booked_notion=o.booked_notion,
-                booked_fee=o.booked_fee,
-                filled=self._filled_amount(o.amount, SIGMA_FILL),
+                prev_filled=o.filled,
+                prev_notion=o.notion,
+                prev_fee=o.fee_cost,
                 price=price,
             )
-            o.status = "closed"
-            o.price = tx["price"]
-            o.filled = tx["filled"]
-            o.notion = tx["notion"]
+            ts = int(time.time() * 1000)
+            o.ts_update = ts
+
+            o.price   = tx["price"]
+            o.filled  = tx["filled"]
+            o.notion  = tx["notion"]
             o.fee_cost = tx["fee"]
-            o.ts_exec = int(time.time() * 1000)
+
+            full = o.filled >= o.amount - 1e-12
+            if full:
+                o.status = "filled"
+                o.ts_exec = ts
+            else:
+                o.status = "partially_filled"
             self.order_book.update(o)
             self._log_order(o)
 

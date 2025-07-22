@@ -10,9 +10,18 @@ import time
 import json
 
 # # ─── Domain constants ────────────────────────────────────────────────────
-OrderSide  = type("OrderSide",  (), {"BUY": "buy",  "SELL": "sell"})
-OrderType  = type("OrderType",  (), {"MARKET": "market", "LIMIT": "limit"})
-OrderState = type("OrderState", (), {"OPEN": "open", "CLOSED": "closed", "CANCELED": "canceled"})
+OrderSide  = type("OrderSide",  (), {"BUY": "buy",
+                                     "SELL": "sell"})
+OrderType  = type("OrderType",  (), {"MARKET": "market",
+                                     "LIMIT": "limit"})
+OrderState = type("OrderState", (), {"NEW": "new",
+                                     "PARTIALLY_FILLED": "partially_filled",
+                                     "FILLED": "filled",
+                                     "CANCELED": "canceled",
+                                     "PARTIALLY_CANCELED": "partially_canceled",
+                                     "EXPIRED": "expired",
+                                     "REJECTED": "rejected",
+                                     })
 
 # ─── Data classes ────────────────────────────────────────────────────────
 @dataclass
@@ -74,8 +83,9 @@ class Order:
     fee_rate      fee rate (e.g. 0.001 for 0.1%)
     notion_currency  quote currency used for value (e.g. USDT)
     fee_currency     currency in which the fee is charged
-    ts_post       millis when the order was *created*  
-    ts_exec       millis when it got *filled* (or None until then)
+    ts_create       millis when the order was *created*  
+    ts_update       millis when the order was last *updated*
+    ts_exec         millis when it got *filled* (or None until then)
 
     Notes
     -----
@@ -92,14 +102,15 @@ class Order:
     fee_rate: float
     booked_fee: float
     # Runtime-mutable fields
-    booked_notion: Optional[float] = None  # until filled
     price: Optional[float] = None
     limit_price: Optional[float] = None  # None for market orders
-    status: str = "open"
-    filled: Optional[float] = None  # until filled
-    notion: Optional[float] = None  # until filled
-    fee_cost: Optional[float] = None  #  until filled
-    ts_post: int = field(default_factory=lambda: int(time.time() * 1000))
+    status: str = "new"
+    booked_notion: float = 0.0  # until filled
+    filled: float = 0.0  # until filled
+    notion: float = 0.0  # until filled
+    fee_cost: float = 0.0  #  until filled
+    ts_create: int = field(default_factory=lambda: int(time.time() * 1000))
+    ts_update: int = field(default_factory=lambda: int(time.time() * 1000))
     ts_exec: Optional[int] = None  # updated when status→closed
 
     # (De)serialise ------------------------------------------------------
