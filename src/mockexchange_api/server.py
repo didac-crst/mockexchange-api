@@ -72,14 +72,17 @@ from typing import List, Literal
 from pykka import Future 
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from pydantic import BaseModel, Field
-
 from mockexchange.engine_actors import start_engine  # NEW import
 from mockexchange.logging_config import logger
+from mockexchange.constants import ALL_STATUS, OPEN_STATUS, CLOSED_STATUS  # NEW import
+
+_ALL_STATUS = Literal[*ALL_STATUS]  # type alias for all order statuses
+_TRADING_SIDES = Literal["buy", "sell"]
 
 # ─────────────────────────── Pydantic models ────────────────────────── #
 class OrderReq(BaseModel):
     symbol: str = "BTC/USDT"
-    side: Literal["buy", "sell"]
+    side: _TRADING_SIDES
     type: Literal["market", "limit"] = "market"
     amount: float
     limit_price: float | None = None
@@ -214,20 +217,21 @@ def asset_balance(asset: str):
 # orders ----------------------------------------------------------------- #
 @app.get("/orders", tags=["Orders"])
 def list_orders(
-    status: Literal["open", "closed", "canceled"] | None = Query(None),
+    status: _ALL_STATUS | None = Query(None),
     symbol: str | None = None,
-    side: Literal["buy", "sell"] | None = Query(None),
+    side: _TRADING_SIDES | None = Query(None),
     tail: int | None = None,
+    include_history: bool = Query(False, description="Include order history in response"),
 ):
-    orders = _g(ENGINE.order_book.get().list(status=status, symbol=symbol, side=side, tail=tail))
-    return [o.__dict__ for o in orders]
+    orders = _g(ENGINE.order_book.get().list(status=status, symbol=symbol, side=side, tail=tail, include_history=include_history))
+    return [o.to_dict(include_history=include_history) for o in orders]
 
 
 @app.get("/orders/list", tags=["Orders"])
 def list_orders_simple(
-    status: Literal["open", "closed", "canceled"] | None = Query(None),
+    status: _ALL_STATUS | None = Query(None),
     symbol: str | None = None,
-    side: Literal["buy", "sell"] | None = Query(None),
+    side: _TRADING_SIDES | None = Query(None),
     tail: int | None = None,
 ):
     orders = _g(ENGINE.order_book.get().list(status=status, symbol=symbol, side=side, tail=tail))
@@ -236,9 +240,9 @@ def list_orders_simple(
 
 
 @app.get("/orders/{oid}", tags=["Orders"])
-def get_order(oid: str):
-    return _g(ENGINE.order_book.get().get(oid))
-
+def get_order(oid: str, include_history: bool = Query(False, description="Include order history in response")):
+    o = _g(ENGINE.order_book.get().get(oid, include_history=include_history))
+    return o.to_dict(include_history=include_history)
 
 @app.post("/orders", tags=["Orders"], dependencies=prod_depends)
 def new_order(req: OrderReq):

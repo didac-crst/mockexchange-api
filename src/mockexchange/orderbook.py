@@ -41,30 +41,14 @@ class OrderBook:
         self._index_add(order)
 
     def update(self, order: Order) -> None:
-        """
-        Up-sert and keep indexes in sync:
-        – If status turned *open* → closed/canceled → drop from sets.
-        – If closed → *open* (unlikely) → add to sets.
-        """
-        # Fetch old status (if any) to decide how to maintain the indexes
-        old_blob = self.r.hget(self.HASH_KEY, order.id)
-        if old_blob:
-            old = Order.from_json(old_blob)
-            if old.status in OPEN_STATUS and order.status not in OPEN_STATUS:
-                self._index_rem(old)
-            elif old.status not in OPEN_STATUS and order.status in OPEN_STATUS:
-                self._index_add(order)
-        else:
-            # brand-new id
-            self._index_add(order)
-
-        self.r.hset(self.HASH_KEY, order.id, order.to_json())
-
-    def get(self, oid: str) -> Order:
+        """Update an existing order."""
+        self.r.hset(self.HASH_KEY, order.id, order.to_json(include_history=True))
+        
+    def get(self, oid: str, *, include_history: bool = False) -> Order:
         blob = self.r.hget(self.HASH_KEY, oid)
         if blob is None:
             raise KeyError(f"order {oid} not found")
-        return Order.from_json(blob)
+        return Order.from_json(blob, include_history=include_history)
 
     def list(
         self,
@@ -73,6 +57,7 @@ class OrderBook:
         symbol: str | None = None,
         side: str | None = None,
         tail: int | None = None,
+        include_history: bool = False
     ) -> List[Order]:
         """
         List orders by status, symbol, side, and limit the tail size.
@@ -89,11 +74,11 @@ class OrderBook:
             if not ids:
                 return []
             blobs = self.r.hmget(self.HASH_KEY, *ids)          # 1 round-trip
-            orders = [Order.from_json(b) for b in blobs if b]
+            orders = [Order.from_json(b, include_history=include_history) for b in blobs if b]
         else:
             # Legacy full scan
             orders = [
-                Order.from_json(blob)
+                Order.from_json(blob, include_history=include_history)
                 for _, blob in self.r.hscan_iter(self.HASH_KEY)
             ]
             if status: # Already fulfilled by if status in OPEN_STATUS

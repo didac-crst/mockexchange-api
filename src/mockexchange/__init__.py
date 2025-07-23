@@ -3,6 +3,7 @@ from importlib.metadata import version, PackageNotFoundError
 from .logging_config import logger
 from ._types import OrderSide, OrderType, OrderState, AssetBalance, Order
 from .engine_actors import start_engine, ExchangeEngineActor  # <-- required
+from .constants import OPEN_STATUS, CLOSED_STATUS, ALL_STATUS  # <-- required
 
 try:
     __version__ = version("mockexchange")
@@ -19,4 +20,7 @@ __all__ = [
     "Order",
     "logger",
     "__version__",
+    "OPEN_STATUS",
+    "CLOSED_STATUS",
+    "ALL_STATUS",
 ]

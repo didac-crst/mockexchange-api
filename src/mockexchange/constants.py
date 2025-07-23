@@ -2,6 +2,7 @@
 
 OPEN_STATUS = ("new", "partially_filled")  # open orders
 CLOSED_STATUS = ("filled", "canceled", "partially_canceled", "expired", "rejected")  # closed orders
+ALL_STATUS = OPEN_STATUS + CLOSED_STATUS  # all orders
 
 # # ─── Domain constants ────────────────────────────────────────────────────
 OrderSide  = type("OrderSide",  (), {"BUY": "buy",

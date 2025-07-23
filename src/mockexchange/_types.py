@@ -12,6 +12,7 @@ import time
 import json
 
 from .constants import OPEN_STATUS, CLOSED_STATUS, OrderSide, OrderType, OrderState
+from .logging_config import logger
 
 # ─── Data classes ────────────────────────────────────────────────────────
 @dataclass
@@ -108,7 +109,8 @@ class Order:
     ts_update       millis when the order was last *updated*
     ts_finish       millis when it can't be further updated (e.g. filled, canceled...)
     history         transaction history of every order update
-    _history_count  number of history entries (used to index the history)
+    history_count  number of history entries (used to index the history)
+    _seed history   only if this is a fresh object (no history loaded yet)
 
     Notes
     -----
@@ -140,11 +142,12 @@ class Order:
     comment: Optional[str] = None  # optional comment for the order
     # History management
     history: Dict[int, OrderHistory] = field(default_factory=dict)
-    _history_count: int = -1  # number of history entries
+    history_count: int = 0  # next free index (not last!)
+    _seed_history: bool = True
 
     def __post_init__(self):
-        # Only seed history if this is a fresh object (no history loaded yet)
-        if self.history:           # already deserialized; don't touch
+        # Only seed history if requested and it's a fresh object (no history yet)
+        if not self._seed_history or self.history:
             return
         self.add_history(
             ts=self.ts_create,
@@ -157,37 +160,46 @@ class Order:
         )
 
     # (De)serialise ------------------------------------------------------
-    def to_json(self) -> str:
-        # return json.dumps(self.__dict__, separators=(",", ":"))
+    def to_dict(self, *, include_history: bool = True) -> dict:
+        """Return a plain dict representation. Optionally strip history to keep payloads small."""
         d = asdict(self)
-        # history is already basic types after asdict
+        if not include_history:
+            d.pop("history", None)
+            d.pop("history_count", None)
+        d.pop("_seed_history", None)
+        return d
+
+    def to_json(self, *, include_history: bool = True) -> str:
+        d = self.to_dict(include_history=include_history)
         return json.dumps(d, separators=(",", ":"))
 
     @classmethod
-    def from_json(cls, blob: str) -> "Order":
+    def from_json(cls, blob: str, *, include_history: bool = False) -> "Order":
         data = json.loads(blob)
-        # Drop unknown keys
         allowed = {f.name for f in dataclass_fields(cls)}
-        data = {k: v for k, v in data.items() if k in allowed}
-        # Re-hydrate history entries
-        if "history" in data and isinstance(data["history"], dict):
-            hist = {}
-            for k, v in data["history"].items():
-                if isinstance(v, dict):
-                    hist[int(k)] = OrderHistory(**v)
+        if include_history:
+            raw_hist = data.get("history", {}) or {}
+            hist: dict[int, OrderHistory] = {}
+            if isinstance(raw_hist, dict):
+                for k, v in raw_hist.items():
+                    if isinstance(v, dict):
+                        hist[int(k)] = OrderHistory(**v)
             data["history"] = hist
-
-        obj = cls(**data)
-        # ensure history counter continues correctly
-        obj._history_count = max(obj.history.keys(), default=-1) + 1
-        return obj
+            # next free slot = max_key + 1
+            data["history_count"] = max(hist.keys(), default=-1) + 1
+            data["_seed_history"] = False  # already have history, do not seed again
+        else:
+            # drop heavy fields and mark to skip seeding
+            data.pop("history", None)
+            data.pop("history_count", None)
+            data["_seed_history"] = False
+            # keep counter sane even without history
+            data["history_count"] = 0
+        # keep only known fields
+        data = {k: v for k, v in data.items() if k in allowed}
+        return cls(**data)
 
     # History management ---------------------------------------------
-    def _count_new_history(self) -> int:
-        """Count and increment the history entry index."""
-        self._history_count += 1
-        return self._history_count
-
     def add_history(self,
                     ts: int,
                     status: str,
@@ -212,8 +224,10 @@ class Order:
             reserved_fee_left=reserved_fee_left,
             comment=comment
         )
-        self.history[self._count_new_history()] = history
-    
+        idx = self.history_count
+        self.history[idx] = history
+        self.history_count = idx + 1
+
     # Residuals handling -----------------------------------
     def residual_base(self) -> float:
         if self.status in CLOSED_STATUS or self.side == "buy":
@@ -248,6 +262,10 @@ class Order:
     @property
     def last_history(self) -> Optional[OrderHistory]:
         """Get the last history entry."""
-        if self.history:
-            return self.history[self._history_count]
+        if self.history and self.history_count >= 0:
+            return self.history.get(self.history_count -1)
         return None
+    
+    def public_payload(self) -> dict:
+        """Alias used by the API layer to strip history by default."""
+        return self.to_dict(include_history=False)

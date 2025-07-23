@@ -85,7 +85,8 @@ class OrderBookActor(_BaseActor):
     # CRUD
     def add(self, o: Order):                self.ob.add(o)
     def update(self, o: Order):             self.ob.update(o)
-    def get(self, oid: str) -> Order:       return self.ob.get(oid)
+    def get(self, oid: str, include_history: bool = False) -> Order:
+        return self.ob.get(oid, include_history=include_history)
     def list(self, **kw) -> List[Order]:    return self.ob.list(**kw)
     def remove(self, oid: str):             self.ob.remove(oid)
     def clear(self):                        self.ob.clear()
@@ -440,8 +441,8 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         Process a single order based on the current market state.
         This simulates order fills based on the current market state.
         """
-        # Order execution idempotency check
-        o_fresh = self.order_book.get(o.id).get()
+
+        o_fresh = self.order_book.get(o.id, include_history=False).get()
         if o_fresh.status not in OPEN_STATUS or o_fresh.actual_filled >= o_fresh.amount - 1e-12:
             return
         o = o_fresh
