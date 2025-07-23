@@ -165,7 +165,6 @@ class Order:
         d = asdict(self)
         if not include_history:
             d.pop("history", None)
-            d.pop("history_count", None)
         d.pop("_seed_history", None)
         return d
 
@@ -180,21 +179,23 @@ class Order:
         if include_history:
             raw_hist = data.get("history", {}) or {}
             hist: dict[int, OrderHistory] = {}
-            if isinstance(raw_hist, dict):
-                for k, v in raw_hist.items():
-                    if isinstance(v, dict):
-                        hist[int(k)] = OrderHistory(**v)
+            # rebuild contiguous indices 0..N-1 to avoid gaps
+            for i, (_, v) in enumerate(sorted(((int(k), v) for k, v in raw_hist.items()), key=lambda x: x[0])):
+                hist[i] = OrderHistory(**v)
             data["history"] = hist
-            # next free slot = max_key + 1
-            data["history_count"] = max(hist.keys(), default=-1) + 1
+            data["history_count"] = len(hist)
             data["_seed_history"] = False  # already have history, do not seed again
         else:
+            # keep counter correct even if we drop the heavy history payload
+            raw_hist = data.get("history", {}) or {}
+            if isinstance(raw_hist, dict) and raw_hist:
+                # next_idx = max(int(k) for k in raw_hist.keys()) + 1
+                next_idx = len(raw_hist)
+            else:
+                next_idx = data.get("history_count", 0)
+            data["history_count"] = next_idx
             # drop heavy fields and mark to skip seeding
-            data.pop("history", None)
-            data.pop("history_count", None)
             data["_seed_history"] = False
-            # keep counter sane even without history
-            data["history_count"] = 0
         # keep only known fields
         data = {k: v for k, v in data.items() if k in allowed}
         return cls(**data)
