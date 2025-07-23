@@ -5,15 +5,13 @@ Redis-backed order book with secondary indexes:
 * Set   : open:set        (ids)                        – every open order
 * Set   : open:{symbol}   (ids)                        – open orders per symbol
 """
+# orderbook.py
 from __future__ import annotations
 
-import json
 import redis
 from typing import List
+from .constants import OPEN_STATUS, CLOSED_STATUS
 from ._types import Order
-
-OPEN_STATUS = ("new", "partially_filled")  # open orders
-CLOSED_STATUS = ("filled", "canceled", "partially_canceled", "expired", "rejected")  # closed orders
 
 class OrderBook:
     HASH_KEY      = "orders"
@@ -98,11 +96,11 @@ class OrderBook:
                 Order.from_json(blob)
                 for _, blob in self.r.hscan_iter(self.HASH_KEY)
             ]
-            if status: # Already fulfilled by if status=='open'
+            if status: # Already fulfilled by if status in OPEN_STATUS
                 orders = [o for o in orders if o.status == status]
-            if symbol: # Already fulfilled by if status=='open' if symbol is not None
+            if symbol: # Already fulfilled by if status in OPEN_STATUS if symbol is not None
                 orders = [o for o in orders if o.symbol == symbol]
-        if side: # Not fulfilled by if status=='open'
+        if side: # Not fulfilled by if status in OPEN_STATUS
             orders = [o for o in orders if o.side == side]
 
         # chronological order

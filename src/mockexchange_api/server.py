@@ -60,9 +60,10 @@ Implementation notes
   ``TEST_ENV=true``.
 
 """
+# server.py
 from __future__ import annotations
 
-import asyncio, os, time
+import asyncio, os, time, redis, socket
 import contextlib
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -103,13 +104,20 @@ class ModifyTickerReq(BaseModel):
 # ───────────────────── initialise actor engine ──────────────────────── #
 REFRESH_S = int(os.getenv("TICK_LOOP_SEC", "10"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+_r = redis.from_url(REDIS_URL, decode_responses=True)
+MY_ID = f"{socket.gethostname()}:{os.getpid()}"
 TEST_ENV = os.getenv("TEST_ENV", "FALSE").lower() in ("1", "true", "yes")
 API_KEY = os.getenv("API_KEY", "invalid-key")
 COMMISSION = float(os.getenv("COMMISSION", "0.0"))
 PRUNE_EVERY_SEC = int(os.getenv("PRUNE_EVERY_SEC", "3600"))
 STALE_AFTER_SEC = int(os.getenv("STALE_AFTER_SEC", "86400"))
+EXPIRE_AFTER_SEC = int(os.getenv("EXPIRE_AFTER_SEC", "2*86400"))
 
 ENGINE = start_engine(redis_url=REDIS_URL, commission=COMMISSION)
+
+LOCK_KEY = "engine:leader"
+LOCK_TTL = 30  # seconds
+
 
 # auth dependency
 async def verify_key(x_api_key: str = Header(...)):
@@ -123,7 +131,7 @@ prod_depends = [] if TEST_ENV else [Depends(verify_key)]
 @asynccontextmanager
 async def lifespan(app):
     tick_task = asyncio.create_task(tick_loop())
-    prune_task = asyncio.create_task(prune_loop())
+    prune_task = asyncio.create_task(prune_sanity_loop())
     yield
     for t in (tick_task, prune_task):
         t.cancel()
@@ -306,15 +314,35 @@ def health():
 
 
 # ─────────────────────── background tasks ────────────────────────────── #
+
+def i_am_leader() -> bool:
+    # atomic: SET key val NX EX ttl
+    # returns True if lock acquired
+    got = _r.set(LOCK_KEY, MY_ID, nx=True, ex=LOCK_TTL)
+    if got:
+        return True
+    # already held? renew if it's me
+    if _r.get(LOCK_KEY) == MY_ID:
+        _r.expire(LOCK_KEY, LOCK_TTL)
+        return True
+    return False
+
+
 async def tick_loop():
     while True:
-        for t in ENGINE.tickers.get():
-            ENGINE.process_price_tick(t).get()
+        if i_am_leader():
+            for t in ENGINE.tickers.get():
+                ENGINE.process_price_tick(t).get()
         await asyncio.sleep(REFRESH_S)
 
 
-async def prune_loop():
-    age = timedelta(seconds=STALE_AFTER_SEC)
+async def prune_sanity_loop():
+    prune_age = timedelta(seconds=STALE_AFTER_SEC)
+    expire_age = timedelta(seconds=EXPIRE_AFTER_SEC)
     while True:
-        ENGINE.prune_orders_older_than(age=age).get()
+        if i_am_leader():
+            ENGINE.prune_orders_older_than(age=prune_age).get()
+            ENGINE.expire_orders_older_than(age=expire_age).get()
+            ENGINE.check_consistent().get()
+        # run every hour, so we don't hammer Redis
         await asyncio.sleep(PRUNE_EVERY_SEC)

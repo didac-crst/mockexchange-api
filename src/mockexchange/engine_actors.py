@@ -2,20 +2,24 @@
 Exchange engine implemented with Pykka actors.
 Non-blocking, single-threaded semantics inside each actor.
 """
+# engine_actors.py
 from __future__ import annotations
 
 import itertools, os, random, threading, time
 import base64, hashlib
 from datetime import timedelta
 from typing import Dict, List
+from collections import defaultdict
+import math
 
 import pykka
 import logging
 import redis
 
 from .market import Market
-from .orderbook import OrderBook, OPEN_STATUS, CLOSED_STATUS
+from .orderbook import OrderBook
 from .portfolio import Portfolio
+from .constants import OPEN_STATUS, CLOSED_STATUS
 from ._types import AssetBalance, Order
 from .logging_config import logger
 
@@ -136,11 +140,11 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         return qty
 
     @staticmethod
-    def _filled_amount(amount: float, sigma: float = 0.1) -> float:
+    def _slippage_simulate(amount: float, sigma: float = 0.5) -> float:
         """
-        Simulate a random fill amount based on a mean and a delta.
-        Half of the time it will fill exactly the amount requested,
-        the other half it will fill less, but never more than requested.
+        Simulate a random slippage based on a mean and a delta.
+        Half of the time it will be exactly the amount requested,
+        the other half it will be less, but never more than requested.
         """
         mean = 1.0
         random_number = random.gauss(mean, sigma)
@@ -153,14 +157,23 @@ class ExchangeEngineActor(pykka.ThreadingActor):
     # ---------- logging ------------------------------------------------ #
     def _log_order(self, order: Order) -> None:
         px = order.price if order.price is not None else order.limit_price
-        px_str = f"{px:.2f} {order.symbol}" if px else "MKT"
-        fee_str = (
-            "N/A" if order.fee_cost is None else f"{order.fee_cost:.2f} {order.fee_currency}"
-        )
+        fee_str = f"{order.actual_fee:.2f} {order.fee_currency}" if order.actual_fee is not None else "N/A"
         asset = order.symbol.split("/")[0]
+        if order.status in ("partially_filled","filled"):
+            order_hist = order.last_history
+            if order_hist is None:
+                logger.warning("No history for order %s", order.id)
+                return
+            amount = order_hist.actual_filled
+            px_str = f"{order_hist.price:.2f} {order.symbol}"
+            fee_str = f"{order_hist.actual_fee:.2f} {order.fee_currency}"
+        else:
+            amount = order.amount - order.actual_filled
+            px_str = f"{px:.2f} {order.symbol}" if px else "MKT"
+            fee_str = "N/A"
         base_msg = (
             f"Order {order.id} [{order.type}] "
-            f"{order.side.upper()} {order.amount:.8f} {asset} at {px_str}, fee {fee_str}"
+            f"{order.side.upper()} {amount:.8f} {asset} at {px_str}, fee {fee_str}"
         )
         status_prefix = {"new": "Created",
                          "partially_filled": "Partially Filled",
@@ -178,14 +191,10 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         *,
         base: str,
         quote: str,
-        amount: float,
-        prev_filled: float,
-        prev_notion: float,
-        prev_fee: float,
+        fillable_amount: float,
         price: float,
     ) -> Dict[str, float]:
-        delta_filled = self._filled_amount(amount - prev_filled, SIGMA_FILL)
-        filled_notion = delta_filled * price
+        filled_notion = fillable_amount * price
         filled_fee = filled_notion * self.commission
         self._release(quote, filled_notion + filled_fee)
         cash = self.portfolio.get(quote).get()
@@ -193,43 +202,68 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         self.portfolio.set(cash)
 
         asset = self.portfolio.get(base).get()
-        asset.free += delta_filled
+        asset.free += fillable_amount
         self.portfolio.set(asset)
-        total_notion = prev_notion + filled_notion
-        total_fee = prev_fee + filled_fee
-        total_filled = prev_filled + delta_filled
-        new_price = total_notion / total_filled if total_filled > 0 else price
-        return {"price": new_price, "notion": total_notion, "filled": total_filled, "fee": total_fee}
+        return {"filled_notion": filled_notion, "filled_fee": filled_fee}
 
     def _execute_sell(
         self,
         *,
         base: str,
         quote: str,
-        amount: float,
-        prev_filled: float,
-        prev_notion: float,
-        prev_fee: float,
+        fillable_amount: float,
         price: float,
     ) -> Dict[str, float]:
-        delta_filled = self._filled_amount(amount - prev_filled, SIGMA_FILL)
-        filled_notion = delta_filled * price
+        filled_notion = fillable_amount * price
         filled_fee = filled_notion * self.commission
-        self._release(base, delta_filled)
+        self._release(base, fillable_amount)
         asset = self.portfolio.get(base).get()
-        asset.free -= delta_filled
+        asset.free -= fillable_amount
         self.portfolio.set(asset)
 
         self._release(quote, filled_fee)
         cash = self.portfolio.get(quote).get()
         cash.free += (filled_notion - filled_fee)
         self.portfolio.set(cash)
-        total_notion = prev_notion + filled_notion
-        total_fee = prev_fee + filled_fee
-        total_filled = prev_filled + delta_filled
-        new_price = total_notion / total_filled if total_filled > 0 else price
-        return {"price": new_price, "notion": total_notion, "filled": total_filled, "fee": total_fee}
+        return {"filled_notion": filled_notion, "filled_fee": filled_fee}
+    
+    # ---------- consistency checks ------------------------------------ #
+    def check_consistency(self, eps: float = 1e-9):
+        """
+        Compare what *should* be reserved (from open orders) with what's in portfolio.used.
+        Returns a dict of mismatches.
+        """
+        open_orders = (
+            self.order_book.list(status="new").get() +
+            self.order_book.list(status="partially_filled").get()
+        )
 
+        expected = defaultdict(float)
+        for o in open_orders:
+            base, quote = o.symbol.split("/")
+            if o.side == "buy":
+                expected[quote] += max(o.reserved_notion_left, 0.0)
+                expected[quote] += max(o.reserved_fee_left,    0.0)
+            else:
+                expected[base]  += max(o.residual_base(),      0.0)
+                expected[quote] += max(o.reserved_fee_left,    0.0)
+
+        mismatches = {}
+
+        # current balances
+        bals = self.portfolio.all().get()
+
+        # check all assets that appear anywhere
+        assets = set(bals.keys()) | set(expected.keys())
+        for asset in assets:
+            used_now = bals.get(asset, AssetBalance(asset)).used
+            used_should = expected.get(asset, 0.0)
+            if not math.isclose(used_now, used_should, rel_tol=0.0, abs_tol=eps):
+                mismatches[asset] = {"used_now": used_now, "used_should": used_should}
+
+        if mismatches:
+            logger.error("Reservation mismatches: %s", mismatches)
+        return mismatches
     # ---------- public API  ------------------------------------------- #
     @property
     def tickers(self):
@@ -281,23 +315,33 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         notion, fee = amount * px, amount * px * self.commission
 
         # funds check
+        comment = None
+        enough_funds = False
         if side == "buy":
             have = self.portfolio.get(quote).get().free
-            if have < notion + fee:
-                raise ValueError(f"need {notion+fee:.2f} {quote}, have {have:.2f}")
+            if have >= notion + fee:
+                enough_funds = True
+            else:
+                comment = (
+                    f"Need {notion + fee:.2f} {quote}, have {have:.2f}"
+                )
         else:
             have = self.portfolio.get(base).get().free
-            if have < amount:
-                raise ValueError(f"need {amount:.8f} {base}, have {have:.8f}")
-
-        # reserve
-        if side == "buy":
-            self._reserve(quote, notion + fee)
-        else:
-            self._reserve(base, amount)
-            self._reserve(quote, fee)
-            notion = 0.0 # no notion booked for sell orders
-
+            if have >= amount:
+                enough_funds = True
+            else:
+                comment = (
+                    f"Need {amount:.8f} {base}, have {have:.8f}"
+                )
+        if enough_funds:
+            if side == "buy":
+                self._reserve(quote, notion + fee)
+            else:
+                self._reserve(base, amount)
+                self._reserve(quote, fee)
+        # set booked values per side
+        booked_notion = notion if side == "buy" else 0.0
+        status = "new" if enough_funds else "rejected"
         # open order
         ts = int(time.time() * 1000)
         order = Order(
@@ -308,15 +352,17 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             amount=amount,
             limit_price=None if type == "market" else limit_price,
             notion_currency=quote,
-            fee_rate=self.commission,
             fee_currency=quote,
-            booked_notion=notion,
-            booked_fee=fee,
-            status="new",
-            filled=0.0,
+            fee_rate=self.commission,
+            initial_booked_notion=booked_notion,
+            reserved_notion_left=booked_notion,
+            initial_booked_fee=fee,
+            reserved_fee_left=fee,
+            status=status,
             ts_create=ts,
             ts_update=ts,
-            ts_exec=None,
+            ts_finish=ts if status in CLOSED_STATUS else None,
+            comment=comment,
         )
         self.order_book.add(order)
         self._log_order(order)
@@ -341,100 +387,182 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         if o.status not in OPEN_STATUS:
             raise ValueError("Only *open* orders can be canceled")
         base, quote = o.symbol.split("/")
-        px = o.limit_price or self.market.last_price(o.symbol).get()
-
         if o.side == "buy":
-            remaining_notion = (o.amount - o.filled) * px
-            remaining_fee    = remaining_notion * o.fee_rate
-            released_quote   = remaining_notion + remaining_fee
-            self._release(quote, released_quote)
-            released_base = 0.0
+            rq = o.residual_quote()
+            released_quote = self._release(quote, rq)
+            released_base  = 0.0
         else:
-            remaining_base = o.amount - o.filled
-            remaining_fee  = remaining_base * px * o.fee_rate
-            released_base  = self._release(base, remaining_base)
-            released_quote = self._release(quote, remaining_fee)
-        o.status = "canceled" if o.filled == 0 else "partially_canceled"
+            rb = o.residual_base()
+            rq = o.residual_quote()
+            released_base  = self._release(base, rb)
+            released_quote = self._release(quote, rq)
+        o.status = "canceled" if o.actual_filled == 0 else "partially_canceled"
         ts = int(time.time() * 1000)
-        o.ts_exec = o.ts_update = ts
+        o.ts_finish = o.ts_update = ts
+        o.add_history(
+            ts=ts,
+            status=o.status,
+            comment="Order canceled by user",
+        )
+        o.squash_booking()
         self.order_book.update(o)
         self._log_order(o)
-        return {"canceled_order": o.__dict__, "freed": {base: released_base, quote: released_quote}}
+        # Sanity checks (idempotency + no leaks)
+        if o.side == "buy":
+            assert o.reserved_notion_left >= -1e-9
+            assert o.reserved_fee_left    >= -1e-9
+        else:
+            assert o.residual_base()      >= -1e-9
+            assert o.reserved_fee_left    >= -1e-9
+
+        return {
+            "canceled_order": o.__dict__,
+            "freed": {base: released_base, quote: released_quote},
+        }
 
     # ---------- price-tick & housekeeping ----------------------------- #
-    def process_price_tick(self, symbol: str):
+    def get_market_state(self, symbol: str):
+        """Get the current market state for the given symbol.
+        Returns a dict with the current ask, bid, ask_volume, and bid_volume.
+        """
         ticker = self.market.fetch_ticker(symbol).get()
         if ticker is None:
-            logger.warning("Ticker %s not found in market", symbol)
+            raise ValueError(f"Ticker {symbol} not found in market")
+        return {
+            "ask": float(ticker["ask"]),
+            "bid": float(ticker["bid"]),
+            "ask_volume": float(ticker.get("ask_volume", 0)),
+            "bid_volume": float(ticker.get("bid_volume", 0)),
+        }
+
+    def process_single_order(self, o: Order, ask: float, bid: float, ask_volume: float, bid_volume: float):
+        """
+        Process a single order based on the current market state.
+        This simulates order fills based on the current market state.
+        """
+        # Order execution idempotency check
+        o_fresh = self.order_book.get(o.id).get()
+        if o_fresh.status not in OPEN_STATUS or o_fresh.actual_filled >= o_fresh.amount - 1e-12:
             return
-
-        ask, bid = ticker["ask"], ticker["bid"]
-        ask_vol = float(ticker.get("ask_volume", 0))
-        bid_vol = float(ticker.get("bid_volume", 0))
-        new_orders = self.order_book.list(status="new", symbol=symbol).get()
-        partially_filled_orders = self.order_book.list(status="partially_filled", symbol=symbol).get()
-        open_orders = new_orders + partially_filled_orders
-        for o in open_orders:
-            if o.type == "market":
-                fillable = (
-                    (o.side == "buy" and o.amount <= ask_vol)
-                    or (o.side == "sell" and o.amount <= bid_vol)
-                )
-            elif o.limit_price is None:
-                pass # should not happen, but just in case
-
-            else:
-                fillable = (
-                    (o.side == "buy" and ask <= o.limit_price and o.amount <= ask_vol)
-                    or (o.side == "sell" and bid >= o.limit_price and o.amount <= bid_vol)
-                )
-            if not fillable:
-                continue
-
-            base, quote = symbol.split("/")
-            tx = (
-                self._execute_buy
-                if o.side == "buy"
-                else self._execute_sell
-            )(
-                base=base,
-                quote=quote,
-                amount=o.amount,
-                prev_filled=o.filled,
-                prev_notion=o.notion,
-                prev_fee=o.fee_cost,
-                price=ask if o.side == "buy" else bid,
+        o = o_fresh
+        fillable = False
+        need_amount = o.amount - o.actual_filled
+        # Simulate slippage
+        total_amount_available = ask_volume if o.side == "buy" else bid_volume
+        amount_available = self._slippage_simulate(total_amount_available, SIGMA_FILL)
+        if amount_available < need_amount:
+            fillable_amount = amount_available
+        else:
+            fillable_amount = need_amount
+        if fillable_amount <= 0:
+            return
+        if o.type == "market":
+            fillable = True
+        elif o.type == "limit":
+            if o.limit_price is None:
+                raise ValueError("Limit orders must have a limit_price")
+            fillable = (
+                (o.side == "buy" and ask <= o.limit_price)
+                or (o.side == "sell" and bid >= o.limit_price)
             )
-            ts = int(time.time() * 1000)
-            o.ts_update = ts
+        if not fillable:
+            return
+        base, quote = o.symbol.split("/")
+        px = ask if o.side == "buy" else bid
+        tx = (
+            self._execute_buy
+            if o.side == "buy"
+            else self._execute_sell
+        )(
+            base=base,
+            quote=quote,
+            fillable_amount=fillable_amount,
+            price=px,
+        )
+        # Calculate the new order state
+        ts = int(time.time() * 1000)
+        total_filled = o.actual_filled + fillable_amount
+        total_notion = o.actual_notion + tx["filled_notion"]
+        total_fee    = o.actual_fee + tx["filled_fee"]
+        # Update the order
+        o.ts_update = ts
+        o.actual_filled = total_filled
+        o.actual_notion = total_notion
+        o.actual_fee    = total_fee
+        o.price         = o.avg_price
 
-            o.price   = tx["price"]
-            o.filled  = tx["filled"]
-            o.notion  = tx["notion"]
-            o.fee_cost = tx["fee"]
+        # shrink reservations
+        if o.side == "buy":
+            o.reserved_notion_left = max(o.reserved_notion_left - tx["filled_notion"], 0.0)
+            o.reserved_fee_left    = max(o.reserved_fee_left    - tx["filled_fee"],    0.0)
+        else:
+            # sell: only fee was reserved in quote, base reservation shrinks via residual_base()
+            o.reserved_fee_left    = max(o.reserved_fee_left    - tx["filled_fee"],    0.0)
 
-            full = o.filled >= o.amount - 1e-12
-            if full:
-                o.status = "filled"
-                o.ts_exec = ts
+        # free leftovers
+        full = o.actual_filled >= (o.amount - 1e-12)
+        if full:
+            base, quote = o.symbol.split("/")
+            # Any leftovers of reservations -> release here
+            if o.side == "buy":
+                rq = o.residual_quote()
+                if rq > 1e-9:
+                    self._release(quote, rq)
             else:
-                o.status = "partially_filled"
-            self.order_book.update(o)
-            self._log_order(o)
+                rb = o.residual_base()
+                rq = o.residual_quote()
+                if rb > 1e-9: self._release(base, rb)
+                if rq > 1e-9: self._release(quote, rq)
+            new_status = "filled"
+            o.ts_finish = ts
+            o.squash_booking()
+        else:
+            new_status = "partially_filled"
+        o.status = new_status
+        o.add_history(
+            ts=ts,
+            status=new_status,
+            price=px,
+            amount_remain=o.amount_remain,
+            actual_filled=fillable_amount,
+            actual_notion=tx["filled_notion"],
+            actual_fee=tx["filled_fee"],
+            reserved_notion_left=o.reserved_notion_left,
+            reserved_fee_left=o.reserved_fee_left,
+        )
+        # Update the order book
+        self.order_book.update(o)
+        self._log_order(o)
+
+
+    def process_price_tick(self, symbol: str):
+        """
+        Process a price tick for the given symbol.
+        This simulates order fills based on the current market state.
+        """
+        market_state = self.get_market_state(symbol)  # ask, bid, ask_volume, bid_volume
+        OPEN_STATUS = "new"  # Open status to fetch orders (new or partially_filled)
+        open_orders = self.order_book.list(status=OPEN_STATUS, symbol=symbol).get()
+        for o in open_orders:
+            self.process_single_order(o, **market_state)
 
     def prune_orders_older_than(
         self,
         *,
         age: timedelta,
-        statuses: tuple[str, ...] = CLOSED_STATUS
     ) -> int:
+        """
+        Prune orders that are older than the specified age.
+        This removes orders that are in CLOSED_STATUS and older than the specified age.
+        Returns the number of orders removed.
+        """
         now_ms = int(time.time() * 1000)
         cutoff = now_ms - int(age.total_seconds() * 1000)
         removed = 0
-        for s in statuses:
+        for s in CLOSED_STATUS:
             for o in self.order_book.list(status=s).get():
                 if o.status in CLOSED_STATUS:
-                    ts = o.ts_exec
+                    ts = o.ts_finish
                     if ts < cutoff:
                         self.order_book.remove(o.id)
                         removed += 1
@@ -443,6 +571,38 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         else:
             logger.info("No stale orders older than %s found", age)
         return removed
+
+    def expire_orders_older_than(
+        self,
+        *,
+        age: timedelta,
+    ) -> int:
+        """
+        Expire open orders that are older than the specified age.
+        """
+        now_ms = int(time.time() * 1000)
+        cutoff = now_ms - int(age.total_seconds() * 1000)
+        expired = 0
+        for s in OPEN_STATUS:
+            for o in self.order_book.list(status=s).get():
+                if o.status in OPEN_STATUS:
+                    ts = o.ts_update
+                    if ts < cutoff:
+                        o.status = "expired"
+                        o.ts_finish = ts
+                        o.add_history(
+                            ts=ts,
+                            status="expired",
+                            comment="Order expired due to inactivity"
+                        )
+                        self.order_book.update(o)
+                        self._log_order(o)
+                        expired += 1
+        if expired:
+            logger.info("Expired %d inactive orders older than %s", expired, age)
+        else:
+            logger.info("No expired orders older than %s found", age)
+        return expired
 
     # ----- dry-run helper --------------------------------------------------- #
     def can_execute(self, *, symbol: str, side: str,
@@ -500,46 +660,25 @@ class ExchangeEngineActor(pykka.ThreadingActor):
     def reset(self):
         self.portfolio.clear()
         self.order_book.clear()
+        # cancel and drain timers
+        for t in self._timers:
+            t.cancel()
+        self._timers.clear()
         self._oid = itertools.count(1)
 
     # ---------- message handler & lifecycle --------------------------- #
     def on_receive(self, msg):
         if msg.get("cmd") == "_settle_market":
             oid = msg["oid"]
-            o = self.order_book.get(oid).get()
-            if o.status not in OPEN_STATUS:
+            try:
+                o = self.order_book.get(oid).get()
+            except KeyError:
+                logger.warning("Order %s vanished before settle; ignoring", oid)
                 return
-            base, quote = o.symbol.split("/")
-            price = self.market.last_price(o.symbol).get()
-            tx = (
-                self._execute_buy
-                if o.side == "buy"
-                else self._execute_sell
-            )(
-                base=base,
-                quote=quote,
-                amount=o.amount,
-                prev_filled=o.filled,
-                prev_notion=o.notion,
-                prev_fee=o.fee_cost,
-                price=price,
-            )
-            ts = int(time.time() * 1000)
-            o.ts_update = ts
-
-            o.price   = tx["price"]
-            o.filled  = tx["filled"]
-            o.notion  = tx["notion"]
-            o.fee_cost = tx["fee"]
-
-            full = o.filled >= o.amount - 1e-12
-            if full:
-                o.status = "filled"
-                o.ts_exec = ts
-            else:
-                o.status = "partially_filled"
-            self.order_book.update(o)
-            self._log_order(o)
+            if o.status not in OPEN_STATUS or o.actual_filled >= o.amount - 1e-12:
+                return
+            market_state = self.get_market_state(o.symbol)
+            self.process_single_order(o, **market_state)
 
     def on_stop(self):
         # cancel pending timers

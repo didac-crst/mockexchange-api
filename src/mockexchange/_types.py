@@ -2,26 +2,16 @@
 Shared tiny enums / dataclasses used across the package.
 Keeps circular-import headaches away from the business logic.
 """
+# _types.py
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
+from dataclasses import fields as dataclass_fields
 from typing import Any, Dict, Optional
 import time
 import json
 
-# # ─── Domain constants ────────────────────────────────────────────────────
-OrderSide  = type("OrderSide",  (), {"BUY": "buy",
-                                     "SELL": "sell"})
-OrderType  = type("OrderType",  (), {"MARKET": "market",
-                                     "LIMIT": "limit"})
-OrderState = type("OrderState", (), {"NEW": "new",
-                                     "PARTIALLY_FILLED": "partially_filled",
-                                     "FILLED": "filled",
-                                     "CANCELED": "canceled",
-                                     "PARTIALLY_CANCELED": "partially_canceled",
-                                     "EXPIRED": "expired",
-                                     "REJECTED": "rejected",
-                                     })
+from .constants import OPEN_STATUS, CLOSED_STATUS, OrderSide, OrderType, OrderState
 
 # ─── Data classes ────────────────────────────────────────────────────────
 @dataclass
@@ -59,6 +49,35 @@ class AssetBalance:
             used=float(d.get("used", 0.0)),
         )
 
+@dataclass
+class OrderHistory:
+    """
+    Order history entry.
+
+    Fields
+    ------
+    ts        millis when the history entry was created  
+    status    order status (e.g., filled, canceled, etc.)
+    price     execution price (None for market orders)
+    amount_remain    amount remaining to be filled
+    actual_filled   filled amount at this point
+    actual_notion    filled notion value at this point
+    actual_fee       fee paid for this fill (None for market orders)
+    reserved_notion_left  notion value booked for the order (not yet filled)
+    reserved_fee_left     fee booked for the order (not yet paid)
+    comment   optional comment for the history entry
+    """
+
+    ts: int
+    status: str
+    price: Optional[float] = None
+    amount_remain: Optional[float] = None
+    actual_filled: Optional[float] = None 
+    actual_notion: Optional[float] = None
+    actual_fee: Optional[float] = None
+    reserved_notion_left: Optional[float] = None
+    reserved_fee_left: Optional[float] = None
+    comment: Optional[str] = None
 
 @dataclass
 class Order:
@@ -72,20 +91,24 @@ class Order:
     side          ``buy`` / ``sell``  
     type          ``market`` / ``limit``  
     amount        order size in base currency
-    status        ``open`` / ``closed`` / ``canceled``  
+    status        ``new`` / ``filled`` / ``canceled`` / ``expired`` / ``rejected`` / ``partially_filled`` / ``partially_canceled``
     price         actual execution price (set at fill time)
     limit_price   user-defined limit price (None for market orders)
-    filled        total amount filled so far
-    booked_notion  notion value booked for the order (not yet filled)
-    notion        total traded value (filled × price)
-    booked_fee   fee booked for the order (not yet paid)
-    fee_cost      fee paid for the order
+    actual_filled        total amount filled so far
+    initial_booked_notion  initial notion value booked for the order (not yet filled)
+    reserved_notion_left  initial notion value booked for the order (not yet filled)
+    actual_notion        total traded value (filled × price)
+    initial_booked_fee     initial fee booked for the order (not yet filled)
+    reserved_fee_left   fee booked for the order (not yet paid)
+    actual_fee      fee paid for the order
     fee_rate      fee rate (e.g. 0.001 for 0.1%)
     notion_currency  quote currency used for value (e.g. USDT)
     fee_currency     currency in which the fee is charged
     ts_create       millis when the order was *created*  
     ts_update       millis when the order was last *updated*
-    ts_exec         millis when it got *filled* (or None until then)
+    ts_finish       millis when it can't be further updated (e.g. filled, canceled...)
+    history         transaction history of every order update
+    _history_count  number of history entries (used to index the history)
 
     Notes
     -----
@@ -100,23 +123,131 @@ class Order:
     notion_currency: str  # usually the quote currency, e.g. USDT
     fee_currency: str
     fee_rate: float
-    booked_fee: float
     # Runtime-mutable fields
+    actual_filled: float = 0.0  # until filled
     price: Optional[float] = None
     limit_price: Optional[float] = None  # None for market orders
     status: str = "new"
-    booked_notion: float = 0.0  # until filled
-    filled: float = 0.0  # until filled
-    notion: float = 0.0  # until filled
-    fee_cost: float = 0.0  #  until filled
+    initial_booked_notion: float = 0.0
+    reserved_notion_left: float = 0.0  # until filled
+    actual_notion: float = 0.0  # until filled
+    initial_booked_fee: float = 0.0
+    reserved_fee_left: float = 0.0  # until filled
+    actual_fee: float = 0.0  #  until filled
     ts_create: int = field(default_factory=lambda: int(time.time() * 1000))
     ts_update: int = field(default_factory=lambda: int(time.time() * 1000))
-    ts_exec: Optional[int] = None  # updated when status→closed
+    ts_finish: Optional[int] = None  # updated when status→closed
+    comment: Optional[str] = None  # optional comment for the order
+    # History management
+    history: Dict[int, OrderHistory] = field(default_factory=dict)
+    _history_count: int = -1  # number of history entries
+
+    def __post_init__(self):
+        # Only seed history if this is a fresh object (no history loaded yet)
+        if self.history:           # already deserialized; don't touch
+            return
+        self.add_history(
+            ts=self.ts_create,
+            status=self.status,
+            price=self.price,
+            amount_remain=self.amount,
+            reserved_notion_left=self.reserved_notion_left,
+            reserved_fee_left=self.reserved_fee_left,
+            comment=self.comment,
+        )
 
     # (De)serialise ------------------------------------------------------
     def to_json(self) -> str:
-        return json.dumps(self.__dict__, separators=(",", ":"))
+        # return json.dumps(self.__dict__, separators=(",", ":"))
+        d = asdict(self)
+        # history is already basic types after asdict
+        return json.dumps(d, separators=(",", ":"))
 
     @classmethod
     def from_json(cls, blob: str) -> "Order":
-        return cls(**json.loads(blob))
+        data = json.loads(blob)
+        # Drop unknown keys
+        allowed = {f.name for f in dataclass_fields(cls)}
+        data = {k: v for k, v in data.items() if k in allowed}
+        # Re-hydrate history entries
+        if "history" in data and isinstance(data["history"], dict):
+            hist = {}
+            for k, v in data["history"].items():
+                if isinstance(v, dict):
+                    hist[int(k)] = OrderHistory(**v)
+            data["history"] = hist
+
+        obj = cls(**data)
+        # ensure history counter continues correctly
+        obj._history_count = max(obj.history.keys(), default=-1) + 1
+        return obj
+
+    # History management ---------------------------------------------
+    def _count_new_history(self) -> int:
+        """Count and increment the history entry index."""
+        self._history_count += 1
+        return self._history_count
+
+    def add_history(self,
+                    ts: int,
+                    status: str,
+                    price: Optional[float] = None,
+                    amount_remain: Optional[float] = None,
+                    actual_filled: Optional[float] = None,
+                    reserved_notion_left: Optional[float] = None,
+                    actual_notion: Optional[float] = None,
+                    reserved_fee_left: Optional[float] = None,
+                    actual_fee: Optional[float] = None,
+                    comment: Optional[str] = None) -> None:
+        """Add a new history entry."""
+        history = OrderHistory(
+            ts=ts,
+            status=status,
+            price=price,
+            amount_remain=amount_remain,
+            actual_filled=actual_filled,
+            actual_notion=actual_notion,
+            actual_fee=actual_fee,
+            reserved_notion_left=reserved_notion_left,
+            reserved_fee_left=reserved_fee_left,
+            comment=comment
+        )
+        self.history[self._count_new_history()] = history
+    
+    # Residuals handling -----------------------------------
+    def residual_base(self) -> float:
+        if self.status in CLOSED_STATUS or self.side == "buy":
+            return 0.0
+        return max(self.amount - self.actual_filled, 0.0)
+
+    def residual_quote(self) -> float:
+        """What’s still reserved in quote currency (USDT) that must be released."""
+        if self.status in CLOSED_STATUS:
+            return 0.0
+        if self.side == "buy":
+            return max(self.reserved_notion_left, 0.0) + max(self.reserved_fee_left, 0.0)
+        else:
+            return max(self.reserved_fee_left, 0.0)
+
+    def squash_booking(self):
+        # keep accountability: align booked_* to actual
+        self.reserved_notion_left = 0.0
+        self.reserved_fee_left = 0.0
+
+    @property
+    def amount_remain(self) -> float:
+        return max(self.amount - self.actual_filled, 0.0)
+
+    @property
+    def avg_price(self) -> Optional[float]:
+        """Average price of the order (None for market orders)."""
+        if self.actual_filled == 0.0 or self.price is None:
+            return None
+        return self.actual_notion / self.actual_filled
+
+    @property
+    def last_history(self) -> Optional[OrderHistory]:
+        """Get the last history entry."""
+        if self.history:
+            return self.history[self._history_count]
+        return None
