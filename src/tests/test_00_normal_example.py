@@ -138,7 +138,7 @@ def test_normal_example(client):
         t_type = random.choice(TRADING_TYPES)
         if t_type == "limit":
             limit_price = (
-                get_last_price(client, symbol) * 0.995
+                get_last_price(client, symbol) * 0.9995
             )  # slightly below market
         else:
             limit_price = None
