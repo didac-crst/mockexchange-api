@@ -132,12 +132,9 @@ class ExchangeEngineActor(pykka.ThreadingActor):
     def _release(self, asset: str, qty: float) -> float:
         bal = self.portfolio.get(asset).get()
         if bal.used < qty:
-            # release everything and raise an error
+            # In case of cancellation, we need to release everything even if used < qty due to rounding
+            # and ensure to have used == 0.0
             qty = bal.used
-            bal.used = 0.0
-            bal.free += qty
-            self.portfolio.set(bal)
-            raise ValueError(f"insufficient {asset} to release")
         bal.used -= qty
         bal.free += qty
         if bal.free and bal.used / bal.free < 1e-10:
@@ -159,6 +156,40 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         if random_number > mean:
             random_number = mean
         return amount * random_number
+
+    # ---- reservation guard ------------------------------------------- #
+    def _cancel_for_insufficient_reserve(self, o: Order, reason: str) -> None:
+        """
+        Cancel (or partially cancel) *o* because the amounts still reserved
+        in the portfolio are not enough to execute the next fill.
+
+        The function
+        • releases whatever is still reserved,
+        • sets the status to canceled / partially_canceled,
+        • appends a history entry,
+        • squashes the residual booking,
+        • updates the order book and emits a log entry.
+        """
+        base, quote = o.symbol.split("/")
+
+        # release leftovers
+        if o.side == "buy":
+            self._release(quote, o.residual_quote())
+        else:
+            self._release(base,  o.residual_base())
+            self._release(quote, o.residual_quote())
+
+        # final order status
+        o.status = "canceled" if o.actual_filled == 0 else "partially_canceled"
+        ts = int(time.time() * 1000)
+        o.ts_update = o.ts_finish = ts
+        o.comment = reason
+        o.add_history(ts=ts, status=o.status, comment=o.comment)
+        o.squash_booking()
+
+        # persist and log
+        self.order_book.update(o)
+        self._log_order(o)
 
     # ---------- logging ------------------------------------------------ #
     def _log_order(self, order: Order) -> None:
@@ -202,19 +233,15 @@ class ExchangeEngineActor(pykka.ThreadingActor):
     ) -> Dict[str, float]:
         filled_notion = fillable_amount * price
         filled_fee = filled_notion * self.commission
-        try:
-            self._release(quote, filled_notion + filled_fee)
-            # Update the cash balance
-            cash = self.portfolio.get(quote).get()
-            cash.free -= (filled_notion + filled_fee)
-            self.portfolio.set(cash)
-            # Update the asset balance
-            asset = self.portfolio.get(base).get()
-            asset.free += fillable_amount
-            self.portfolio.set(asset)
-        except ValueError as e:
-            logger.error("Failed to execute buy: %s", e)
-            # Order should be canceled in this case
+        # Reduce the cash balance
+        self._release(quote, filled_notion + filled_fee)
+        cash = self.portfolio.get(quote).get()
+        cash.free -= (filled_notion + filled_fee)
+        self.portfolio.set(cash)
+        # Increase the asset balance
+        asset = self.portfolio.get(base).get()
+        asset.free += fillable_amount
+        self.portfolio.set(asset)
         return {"filled_notion": filled_notion, "filled_fee": filled_fee}
 
     def _execute_sell(
@@ -227,23 +254,16 @@ class ExchangeEngineActor(pykka.ThreadingActor):
     ) -> Dict[str, float]:
         filled_notion = fillable_amount * price
         filled_fee = filled_notion * self.commission
-        try:
-            # TO DO - If 1 error on the first release, the second release will not happen
-            # However, both releases need to happen
-            # Or it could be handled on cancellation level.
-            self._release(base, fillable_amount)
-            self._release(quote, filled_fee)
-            # Update the asset balance
-            asset = self.portfolio.get(base).get()
-            asset.free -= fillable_amount
-            self.portfolio.set(asset)
-            # Update cash balance
-            cash = self.portfolio.get(quote).get()
-            cash.free += (filled_notion - filled_fee)
-            self.portfolio.set(cash)
-        except ValueError as e:
-            logger.error("Failed to execute sell: %s", e)
-            # Order should be canceled in this case
+        # Reduce the asset balance
+        self._release(base, fillable_amount)
+        asset = self.portfolio.get(base).get()
+        asset.free -= fillable_amount
+        self.portfolio.set(asset)
+        # Increase the cash balance
+        self._release(quote, filled_fee)
+        cash = self.portfolio.get(quote).get()
+        cash.free += (filled_notion - filled_fee)
+        self.portfolio.set(cash)
         return {"filled_notion": filled_notion, "filled_fee": filled_fee}
     
     # ---------- consistency checks ------------------------------------ #
@@ -345,6 +365,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                     f"Need {notion + fee:.2f} {quote}, have {have:.2f}"
                 )
         else:
+            # Test if we have enough base to sell
             have = self.portfolio.get(base).get().free
             if have >= amount:
                 enough_funds = True
@@ -352,6 +373,14 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                 comment = (
                     f"Need {amount:.8f} {base}, have {have:.8f}"
                 )
+            # Test if we have enough quote to pay the fee
+            have = self.portfolio.get(quote).get().free
+            if have >= fee:
+                enough_funds = enough_funds and True
+            else:
+                comment = (
+                    f"Need {fee:.2f} {quote}, have {have:.2f}"
+                ) if comment is None else comment + f", need {fee:.2f} {quote}, have {have:.2f}"
         if enough_funds:
             if side == "buy":
                 self._reserve(quote, notion + fee)
@@ -489,6 +518,42 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             return
         base, quote = o.symbol.split("/")
         px = ask if o.side == "buy" else bid
+
+        # ---------------- reservation check ---------------------------
+        # If the order is not fillable due to insufficient reserves,
+        # we cancel it and release the reserved amounts.
+        if o.side == "buy":
+            need_quote = fillable_amount * px * (1 + self.commission)
+            total_balance_q = self.portfolio.get(quote).get().total
+            if total_balance_q + 1e-12 < need_quote:
+                self._cancel_for_insufficient_reserve(
+                    o,
+                    reason=f"Insufficient {quote} reserved to buy (need {need_quote:.8f} {quote}, have {total_balance_q:.8f} {quote})"
+                )
+                return
+        else:  # sell
+            need_asset = fillable_amount
+            need_fee_q = fillable_amount * px * self.commission
+            total_balance_a = self.portfolio.get(base).get().total
+            total_balance_q = self.portfolio.get(quote).get().total
+            if total_balance_a + 1e-12 < need_asset:
+                self._cancel_for_insufficient_reserve(
+                    o,
+                    reason=(
+                        f"Insufficient {base} reserved for sell (need {need_asset:.8f} {base}, have {total_balance_a:.8f} {base})"
+                    ),
+                )
+                return
+            elif total_balance_q + 1e-12 < need_fee_q:
+                self._cancel_for_insufficient_reserve(
+                    o,
+                    reason=(
+                        f"Insufficient {quote} reserved for sell to pay fee "
+                        f"(need {need_fee_q:.8f} {quote}, have {total_balance_q:.8f} {quote})"
+                    ),
+                )
+                return
+
         tx = (
             self._execute_buy
             if o.side == "buy"
