@@ -46,7 +46,7 @@ ASSETS_TO_BUY: Final[list[str]] = [  # majors we accumulate
     "DOGE",
     "DOT",
 ]
-NUM_EXTRA_ASSETS = 8  # additional assets to buy, if available
+NUM_EXTRA_ASSETS = 12  # additional assets to buy, if available
 TRADING_TYPES = ["market", "limit"]  # order types we can place
 
 
@@ -135,9 +135,11 @@ def test_normal_example(client):
 
         # Choose a random trading type (market or limit) and set limit price
         # to slightly below market for limit orders (to avoid immediate fill).
-        t_type = random.choice(*TRADING_TYPES)
+        t_type = random.choice(TRADING_TYPES)
         if t_type == "limit":
-            limit_price = get_last_price(client, symbol) * 0.995  # slightly below market
+            limit_price = (
+                get_last_price(client, symbol) * 0.995
+            )  # slightly below market
         else:
             limit_price = None
 
