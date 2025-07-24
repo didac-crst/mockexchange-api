@@ -561,7 +561,6 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         This simulates order fills based on the current market state.
         """
         market_state = self.get_market_state(symbol)  # ask, bid, ask_volume, bid_volume
-        OPEN_STATUS = "new"  # Open status to fetch orders (new or partially_filled)
         open_orders = self.order_book.list(status=OPEN_STATUS, symbol=symbol).get()
         for o in open_orders:
             self.process_single_order(o, **market_state)

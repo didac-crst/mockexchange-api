@@ -53,7 +53,7 @@ class OrderBook:
     def list(
         self,
         *,
-        status: str | None = None,
+        status: list[str] | str | None = None,
         symbol: str | None = None,
         side: str | None = None,
         tail: int | None = None,
@@ -64,8 +64,12 @@ class OrderBook:
         Open orders are indexed by symbol, so they can be fetched quickly.
         """
         orders: list[Order]
-
-        if status in OPEN_STATUS:
+        if isinstance(status, str):
+            status = [status]
+        if status is None:
+            status = OPEN_STATUS + CLOSED_STATUS
+        # Only if all statuses are OPEN_STATUS, we can use the indexes
+        if all(s in OPEN_STATUS for s in status):
             # Use secondary indexes
             if symbol:
                 ids = self.r.smembers(self.OPEN_SYM_KEY.format(sym=symbol))
@@ -81,12 +85,13 @@ class OrderBook:
                 Order.from_json(blob, include_history=include_history)
                 for _, blob in self.r.hscan_iter(self.HASH_KEY)
             ]
-            if status: # Already fulfilled by if status in OPEN_STATUS
-                orders = [o for o in orders if o.status == status]
             if symbol: # Already fulfilled by if status in OPEN_STATUS if symbol is not None
                 orders = [o for o in orders if o.symbol == symbol]
+        # Filter for both cases
         if side: # Not fulfilled by if status in OPEN_STATUS
             orders = [o for o in orders if o.side == side]
+        # Make sure we only return orders with the requested status
+        orders = [o for o in orders if o.status in status]
 
         # chronological order
         orders.sort(key=lambda o: o.ts_update, reverse=True)
