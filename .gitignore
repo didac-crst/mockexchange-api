@@ -8,6 +8,7 @@ __pycache__/
 .build/
 dist/
 pip-wheel-metadata/
+.hypothesis/
 
 # Poetry / PDM / Hatch caches
 .cache/
