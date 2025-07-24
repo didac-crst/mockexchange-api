@@ -61,9 +61,10 @@ Implementation notes
 
 """
 
+# server.py
 from __future__ import annotations
 
-import asyncio, os, time
+import asyncio, os, time, redis, socket
 import contextlib
 from contextlib import asynccontextmanager
 from datetime import timedelta
@@ -72,15 +73,18 @@ from typing import List, Literal
 from pykka import Future
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from pydantic import BaseModel, Field
-
 from mockexchange.engine_actors import start_engine  # NEW import
 from mockexchange.logging_config import logger
+from mockexchange.constants import ALL_STATUS, OPEN_STATUS, CLOSED_STATUS  # NEW import
+
+_ALL_STATUS = Literal[*ALL_STATUS]  # type alias for all order statuses
+_TRADING_SIDES = Literal["buy", "sell"]
 
 
 # ─────────────────────────── Pydantic models ────────────────────────── #
 class OrderReq(BaseModel):
     symbol: str = "BTC/USDT"
-    side: Literal["buy", "sell"]
+    side: _TRADING_SIDES
     type: Literal["market", "limit"] = "market"
     amount: float
     limit_price: float | None = None
@@ -105,13 +109,19 @@ class ModifyTickerReq(BaseModel):
 # ───────────────────── initialise actor engine ──────────────────────── #
 REFRESH_S = int(os.getenv("TICK_LOOP_SEC", "10"))
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+_r = redis.from_url(REDIS_URL, decode_responses=True)
+MY_ID = f"{socket.gethostname()}:{os.getpid()}"
 TEST_ENV = os.getenv("TEST_ENV", "FALSE").lower() in ("1", "true", "yes")
 API_KEY = os.getenv("API_KEY", "invalid-key")
 COMMISSION = float(os.getenv("COMMISSION", "0.0"))
 PRUNE_EVERY_SEC = int(os.getenv("PRUNE_EVERY_SEC", "3600"))
 STALE_AFTER_SEC = int(os.getenv("STALE_AFTER_SEC", "86400"))
+EXPIRE_AFTER_SEC = int(os.getenv("EXPIRE_AFTER_SEC", "2*86400"))
 
 ENGINE = start_engine(redis_url=REDIS_URL, commission=COMMISSION)
+
+LOCK_KEY = "engine:leader"
+LOCK_TTL = 30  # seconds
 
 
 # auth dependency
@@ -127,7 +137,7 @@ prod_depends = [] if TEST_ENV else [Depends(verify_key)]
 @asynccontextmanager
 async def lifespan(app):
     tick_task = asyncio.create_task(tick_loop())
-    prune_task = asyncio.create_task(prune_loop())
+    prune_task = asyncio.create_task(prune_sanity_loop())
     yield
     for t in (tick_task, prune_task):
         t.cancel()
@@ -211,22 +221,31 @@ def asset_balance(asset: str):
 # orders ----------------------------------------------------------------- #
 @app.get("/orders", tags=["Orders"])
 def list_orders(
-    status: Literal["open", "closed", "canceled"] | None = Query(None),
+    status: _ALL_STATUS | None = Query(None),
     symbol: str | None = None,
-    side: Literal["buy", "sell"] | None = Query(None),
+    side: _TRADING_SIDES | None = Query(None),
     tail: int | None = None,
+    include_history: bool = Query(
+        False, description="Include order history in response"
+    ),
 ):
     orders = _g(
-        ENGINE.order_book.get().list(status=status, symbol=symbol, side=side, tail=tail)
+        ENGINE.order_book.get().list(
+            status=status,
+            symbol=symbol,
+            side=side,
+            tail=tail,
+            include_history=include_history,
+        )
     )
-    return [o.__dict__ for o in orders]
+    return [o.to_dict(include_history=include_history) for o in orders]
 
 
 @app.get("/orders/list", tags=["Orders"])
 def list_orders_simple(
-    status: Literal["open", "closed", "canceled"] | None = Query(None),
+    status: _ALL_STATUS | None = Query(None),
     symbol: str | None = None,
-    side: Literal["buy", "sell"] | None = Query(None),
+    side: _TRADING_SIDES | None = Query(None),
     tail: int | None = None,
 ):
     orders = _g(
@@ -237,8 +256,14 @@ def list_orders_simple(
 
 
 @app.get("/orders/{oid}", tags=["Orders"])
-def get_orders(oid: str):
-    return _g(ENGINE.order_book.get().get(oid))
+def get_order(
+    oid: str,
+    include_history: bool = Query(
+        False, description="Include order history in response"
+    ),
+):
+    o = _g(ENGINE.order_book.get().get(oid, include_history=include_history))
+    return o.to_dict(include_history=include_history)
 
 
 @app.post("/orders", tags=["Orders"], dependencies=prod_depends)
@@ -322,15 +347,36 @@ def health():
 
 
 # ─────────────────────── background tasks ────────────────────────────── #
+
+
+def i_am_leader() -> bool:
+    # atomic: SET key val NX EX ttl
+    # returns True if lock acquired
+    got = _r.set(LOCK_KEY, MY_ID, nx=True, ex=LOCK_TTL)
+    if got:
+        return True
+    # already held? renew if it's me
+    if _r.get(LOCK_KEY) == MY_ID:
+        _r.expire(LOCK_KEY, LOCK_TTL)
+        return True
+    return False
+
+
 async def tick_loop():
     while True:
-        for t in ENGINE.tickers.get():
-            ENGINE.process_price_tick(t).get()
+        if i_am_leader():
+            for t in ENGINE.tickers.get():
+                ENGINE.process_price_tick(t).get()
         await asyncio.sleep(REFRESH_S)
 
 
-async def prune_loop():
-    age = timedelta(seconds=STALE_AFTER_SEC)
+async def prune_sanity_loop():
+    prune_age = timedelta(seconds=STALE_AFTER_SEC)
+    expire_age = timedelta(seconds=EXPIRE_AFTER_SEC)
     while True:
-        ENGINE.prune_orders_older_than(age=age).get()
+        if i_am_leader():
+            ENGINE.prune_orders_older_than(age=prune_age).get()
+            ENGINE.expire_orders_older_than(age=expire_age).get()
+            ENGINE.check_consistent().get()
+        # run every hour, so we don't hammer Redis
         await asyncio.sleep(PRUNE_EVERY_SEC)

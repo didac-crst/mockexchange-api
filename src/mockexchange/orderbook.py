@@ -5,13 +5,13 @@ Redis-backed order book with secondary indexes:
 * Set   : open:set        (ids)                        – every open order
 * Set   : open:{symbol}   (ids)                        – open orders per symbol
 """
+# orderbook.py
 from __future__ import annotations
 
-import json
 import redis
 from typing import List
+from .constants import OPEN_STATUS, CLOSED_STATUS
 from ._types import Order
-
 
 class OrderBook:
     HASH_KEY      = "orders"
@@ -24,7 +24,8 @@ class OrderBook:
     # ------------ internal helpers ------------------------------------ #
     def _index_add(self, order: Order) -> None:
         """Add id to the open indexes (only if order is OPEN)."""
-        if order.status != "open":
+        if order.status not in OPEN_STATUS:
+            # Only add to indexes if the order is open (new or partially filled)
             return
         self.r.sadd(self.OPEN_ALL_KEY, order.id)
         self.r.sadd(self.OPEN_SYM_KEY.format(sym=order.symbol), order.id)
@@ -40,45 +41,35 @@ class OrderBook:
         self._index_add(order)
 
     def update(self, order: Order) -> None:
-        """
-        Up-sert and keep indexes in sync:
-        – If status turned *open* → closed/canceled → drop from sets.
-        – If closed → *open* (unlikely) → add to sets.
-        """
-        # Fetch old status (if any) to decide how to maintain the indexes
-        old_blob = self.r.hget(self.HASH_KEY, order.id)
-        if old_blob:
-            old = Order.from_json(old_blob)
-            if old.status == "open" and order.status != "open":
-                self._index_rem(old)
-            elif old.status != "open" and order.status == "open":
-                self._index_add(order)
-        else:
-            # brand-new id
-            self._index_add(order)
-
-        self.r.hset(self.HASH_KEY, order.id, order.to_json())
-
-    def get(self, oid: str) -> Order:
+        """Update an existing order."""
+        self.r.hset(self.HASH_KEY, order.id, order.to_json(include_history=True))
+        
+    def get(self, oid: str, *, include_history: bool = False) -> Order:
         blob = self.r.hget(self.HASH_KEY, oid)
         if blob is None:
             raise KeyError(f"order {oid} not found")
-        return Order.from_json(blob)
+        return Order.from_json(blob, include_history=include_history)
 
     def list(
         self,
         *,
-        status: str | None = None,
+        status: list[str] | str | None = None,
         symbol: str | None = None,
         side: str | None = None,
         tail: int | None = None,
+        include_history: bool = False
     ) -> List[Order]:
         """
-        O(#open) when status=='open', else falls back to O(total).
+        List orders by status, symbol, side, and limit the tail size.
+        Open orders are indexed by symbol, so they can be fetched quickly.
         """
         orders: list[Order]
-
-        if status == "open":
+        if isinstance(status, str):
+            status = [status]
+        if status is None:
+            status = OPEN_STATUS + CLOSED_STATUS
+        # Only if all statuses are OPEN_STATUS, we can use the indexes
+        if all(s in OPEN_STATUS for s in status):
             # Use secondary indexes
             if symbol:
                 ids = self.r.smembers(self.OPEN_SYM_KEY.format(sym=symbol))
@@ -87,24 +78,25 @@ class OrderBook:
             if not ids:
                 return []
             blobs = self.r.hmget(self.HASH_KEY, *ids)          # 1 round-trip
-            orders = [Order.from_json(b) for b in blobs if b]
+            orders = [Order.from_json(b, include_history=include_history) for b in blobs if b]
         else:
             # Legacy full scan
             orders = [
-                Order.from_json(blob)
+                Order.from_json(blob, include_history=include_history)
                 for _, blob in self.r.hscan_iter(self.HASH_KEY)
             ]
-            if status: # Already fulfilled by if status=='open'
-                orders = [o for o in orders if o.status == status]
-            if symbol: # Already fulfilled by if status=='open' if symbol is not None
+            if symbol: # Already fulfilled by if status in OPEN_STATUS if symbol is not None
                 orders = [o for o in orders if o.symbol == symbol]
-        if side: # Not fulfilled by if status=='open'
+        # Filter for both cases
+        if side: # Not fulfilled by if status in OPEN_STATUS
             orders = [o for o in orders if o.side == side]
+        # Make sure we only return orders with the requested status
+        orders = [o for o in orders if o.status in status]
 
         # chronological order
-        orders.sort(key=lambda o: o.ts_post)
-        orders = orders[-tail:] if (tail and len(orders) > tail) else orders
-        orders = orders[::-1]  # reverse to have the latest first
+        orders.sort(key=lambda o: o.ts_update, reverse=True)
+        if tail is not None and tail > 0:
+            orders = orders[:tail]
         return orders
 
     # ---------- hard delete ------------------------------------------ #
@@ -114,7 +106,7 @@ class OrderBook:
         if not blob:                       # already gone
             return
         o = Order.from_json(blob)
-        if o.status == "open":             # keep indexes consistent
+        if o.status in OPEN_STATUS:            # keep indexes consistent
             self._index_rem(o)
         pipe = self.r.pipeline()
         pipe.hdel(self.HASH_KEY, oid)

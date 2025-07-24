@@ -68,7 +68,8 @@ then start **MockExchange** as shown above.
 | `TEST_ENV` | `false` | `true` disables auth **and** re-enables `/docs`; tests set this to `True`. |
 | `TICK_LOOP_SEC` | `30` | Scan interval for the background price-tick loop. |
 | `PRUNE_EVERY_SEC` | `3600` | How often the prune job runs (seconds). `0` disables automatic pruning. |
-| `STALE_AFTER_SEC` | `86400` | Age threshold for permanent deletion of *closed* / *canceled* orders (seconds). |
+| `STALE_AFTER_SEC` | `86400` | Age threshold for permanent deletion of *filled* / *canceled* / *partially_canceled* / *expired* / *rejected* orders (seconds). |
+| `EXPIRE_AFTER_SEC` | `172800` | Age threshold for non-traded "OPEN" orders  *new* / *partially_filled* orders (seconds). |
 | `MIN_TIME_ANSWER_ORDER_MARKET` | `3` | Lower bound for artificial latency (seconds) before a market order is filled. |
 | `MAX_TIME_ANSWER_ORDER_MARKET` | `5` | Upper bound for the artificial latency. |
 | `SIGMA_FILL_MARKET_ORDER` | `0.1` | Standard‑deviation parameter that controls the random partial‑fill ratio for simulated market orders – higher values mean more variability and a greater chance of partial fills. |
@@ -94,6 +95,7 @@ TEST_ENV=True
 TICK_LOOP_SEC=30
 PRUNE_EVERY_SEC=3600
 STALE_AFTER_SEC=86400
+EXPIRE_AFTER_SEC=172800
 MIN_TIME_ANSWER_ORDER_MARKET=3
 MAX_TIME_ANSWER_ORDER_MARKET=5
 SIGMA_FILL_MARKET_ORDER=0.1
@@ -133,7 +135,7 @@ Feel free to drop-in replace the old table in the README.
 | **GET** | `/orders/{oid}`                               | Inspect a single order.                                                |
 | **POST** | `/orders`                                    | Create *market* or *limit* order.                                      |
 | **POST** | `/orders/can_execute`                        | Dry-run: check if there’s enough balance for the order.                |
-| **POST** | `/orders/{oid}/cancel`                       | Cancel an *open* order.                                                |
+| **POST** | `/orders/{oid}/cancel`                       | Cancel an *OPEN* order (`new` / `partially_filled`)                    |
 | **PATCH** | `/admin/tickers/{symbol}/price`             | Manually patch a ticker’s last-price (plus optional volumes).          |
 | **PATCH** | `/admin/balance/{asset}`                    | Overwrite or create a balance row (`free`, `used`).                    |
 | **POST** | `/admin/fund`                                | Credit an asset’s `free` column (quick top-up).                        |
@@ -241,7 +243,7 @@ mockx ticker BTC/USDT         # latest price snapshot
 | `mockx balance` | `GET /balance` | Dump every asset row. |
 | `mockx ticker <SYM>` | `GET /tickers/<SYM>` | Latest ticker (comma list allowed). |
 | `mockx order <SYM> <buy\|sell> <qty> [--type limit] [--price P]` | `POST /orders` | Create market/limit order. |
-| `mockx cancel <OID>` | `POST /orders/{oid}/cancel` | Cancel an **open** order. |
+| `mockx cancel <OID>` | `POST /orders/{oid}/cancel` | Cancel an **OPEN** order. |
 | `mockx orders [...]` | `GET /orders` | List orders (`--status`, `--symbol`, …). |
 | `mockx order-get <OID>` | `GET /orders/{oid}` | Inspect one order. |
 | `mockx orders-simple` | `GET /orders/list` | Count + OID list. |
@@ -263,7 +265,7 @@ docker exec -it mockexchange-api bash
 mockx reset-data
 mockx fund USDT 100000
 mockx order BTC/USDT buy 0.05
-mockx orders --status closed
+mockx orders --status filled
 ```
 
 ---
@@ -342,7 +344,7 @@ mockexchange-api/
 If you prefer a GUI, check the companion repo **mockexchange‑deck**  
 <https://github.com/didac-crst/mockexchange-deck>.
 
-It’s a single‑user Streamlit dashboard that shows your balances and open orders.
+It’s a single‑user Streamlit dashboard that shows your balances and existing orders.
 
 ---  
 
