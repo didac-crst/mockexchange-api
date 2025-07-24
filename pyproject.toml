@@ -27,6 +27,7 @@ ruff            = "*"
 black           = "*"
 mypy            = "^1.10"
 pytest-dotenv = "^0.5.2"
+hypothesis = "^6.100"
 
 [tool.poetry.scripts]
 # short, easy to type
