@@ -7,9 +7,9 @@ FastAPI façade over :class:`mockexchange.engine.ExchangeEngine`.
 * **No business logic** lives here – we only translate *HTTP ⇄ Python*.
 * Designed to run **inside a Docker container** (host-network is fine).
 * All state (balances, orders, tick data) persists in Valkey/Redis.
-* **Authentication**  
-  Every request must include  
-  ``x-api-key: $API_KEY`` unless the container is started with  
+* **Authentication**
+  Every request must include
+  ``x-api-key: $API_KEY`` unless the container is started with
   ``TEST_ENV=true`` (integration tests).
 
 Environment variables
@@ -24,7 +24,7 @@ HTTP Endpoints
 --------------
 Market data
 ~~~~~~~~~~~
-GET  **/tickers**                      → list of all symbols  
+GET  **/tickers**                      → list of all symbols
 GET  **/tickers/{ticker}**             → one ticker (e.g. ``BTC/USDT``)
 
 Portfolio
@@ -37,16 +37,16 @@ Orders
 ~~~~~~
 GET  **/orders**                       → display all orders, optional filters
 GET  **/orders/list**                  → list orders, optional filters
-GET  **/orders/{oid}**                 → single order by id  
-POST **/orders**                       → create *market* | *limit* order  
-POST **/orders/can_execute**           → dry-run balance check  
+GET  **/orders/{oid}**                 → single order by id
+POST **/orders**                       → create *market* | *limit* order
+POST **/orders/can_execute**           → dry-run balance check
 POST **/orders/{oid}/cancel**          → cancel *open* order
 
 Admin
 ~~~~~
 PATCH **/admin/tickers/{ticker}/price** → set ticker price and volumes
-PATCH **/admin/edit_balance**           → overwrite or add a balance row  
-PATCH **/admin/fund**                   → credit an asset’s *free* column  
+PATCH **/admin/edit_balance**           → overwrite or add a balance row
+PATCH **/admin/fund**                   → credit an asset’s *free* column
 DELETE **/admin/data**                  → wipe balances **and** orders
 GET **/admin/health**                  → check service health
 
@@ -60,6 +60,7 @@ Implementation notes
   ``TEST_ENV=true``.
 
 """
+
 from __future__ import annotations
 
 import asyncio, os, time
@@ -68,12 +69,13 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import List, Literal
 
-from pykka import Future 
+from pykka import Future
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from pydantic import BaseModel, Field
 
 from mockexchange.engine_actors import start_engine  # NEW import
 from mockexchange.logging_config import logger
+
 
 # ─────────────────────────── Pydantic models ────────────────────────── #
 class OrderReq(BaseModel):
@@ -111,6 +113,7 @@ STALE_AFTER_SEC = int(os.getenv("STALE_AFTER_SEC", "86400"))
 
 ENGINE = start_engine(redis_url=REDIS_URL, commission=COMMISSION)
 
+
 # auth dependency
 async def verify_key(x_api_key: str = Header(...)):
     if x_api_key != API_KEY:
@@ -118,6 +121,7 @@ async def verify_key(x_api_key: str = Header(...)):
 
 
 prod_depends = [] if TEST_ENV else [Depends(verify_key)]
+
 
 # ───────────────────────────── FastAPI app ──────────────────────────── #
 @asynccontextmanager
@@ -166,6 +170,7 @@ def all_tickers():
 # def ticker(ticker: str = "BTC/USDT"):
 #     return _g(ENGINE.fetch_ticker(ticker))
 
+
 @app.get("/tickers/{symbols:path}", tags=["Market"])
 def ticker(symbols: str = "BTC/USDT"):
     """Return one ticker (str) or many tickers (comma-separated list).
@@ -182,7 +187,7 @@ def ticker(symbols: str = "BTC/USDT"):
     for sym in requested:
         try:
             out[sym] = _g(ENGINE.fetch_ticker(sym))
-        except ValueError as e:       # unknown or inactive symbol
+        except ValueError as e:  # unknown or inactive symbol
             out[sym] = {"error": str(e)}
     return out
 
@@ -211,7 +216,9 @@ def list_orders(
     side: Literal["buy", "sell"] | None = Query(None),
     tail: int | None = None,
 ):
-    orders = _g(ENGINE.order_book.get().list(status=status, symbol=symbol, side=side, tail=tail))
+    orders = _g(
+        ENGINE.order_book.get().list(status=status, symbol=symbol, side=side, tail=tail)
+    )
     return [o.__dict__ for o in orders]
 
 
@@ -222,13 +229,15 @@ def list_orders_simple(
     side: Literal["buy", "sell"] | None = Query(None),
     tail: int | None = None,
 ):
-    orders = _g(ENGINE.order_book.get().list(status=status, symbol=symbol, side=side, tail=tail))
+    orders = _g(
+        ENGINE.order_book.get().list(status=status, symbol=symbol, side=side, tail=tail)
+    )
     ids = [o.id for o in orders]
     return {"length": len(ids), "orders": ids}
 
 
 @app.get("/orders/{oid}", tags=["Orders"])
-def get_order(oid: str):
+def get_orders(oid: str):
     return _g(ENGINE.order_book.get().get(oid))
 
 
@@ -243,14 +252,17 @@ def new_order(req: OrderReq):
     except ValueError as e:
         raise HTTPException(400, str(e))
 
+
 @app.post("/orders/can_execute", tags=["Orders"])
 def dry_run(req: OrderReq):
-    return _g(ENGINE.can_execute(
-        symbol=req.symbol,
-        side=req.side,
-        amount=req.amount,
-        price=req.limit_price,
-    ))
+    return _g(
+        ENGINE.can_execute(
+            symbol=req.symbol,
+            side=req.side,
+            amount=req.amount,
+            price=req.limit_price,
+        )
+    )
 
 
 @app.post("/orders/{oid}/cancel", tags=["Orders"], dependencies=prod_depends)
@@ -263,7 +275,9 @@ def cancel(oid: str):
 
 
 # admin ------------------------------------------------------------------ #
-@app.patch("/admin/tickers/{ticker:path}/price", tags=["Admin"], dependencies=prod_depends)
+@app.patch(
+    "/admin/tickers/{ticker:path}/price", tags=["Admin"], dependencies=prod_depends
+)
 def patch_ticker_price(ticker: str, body: ModifyTickerReq):
     ts = time.time()
     price = body.price
@@ -271,7 +285,8 @@ def patch_ticker_price(ticker: str, body: ModifyTickerReq):
     dummy_notion = 10**12  # just a large number to ensure liquid volumes
     body.bid_volume = body.bid_volume or dummy_notion / bid
     body.ask_volume = body.ask_volume or dummy_notion / ask
-    data = _g(ENGINE.set_ticker(
+    data = _g(
+        ENGINE.set_ticker(
             ticker,
             price,
             ts,
@@ -279,7 +294,8 @@ def patch_ticker_price(ticker: str, body: ModifyTickerReq):
             ask,
             body.bid_volume,
             body.ask_volume,
-        ))
+        )
+    )
     _g(ENGINE.process_price_tick(ticker))
     return data
 
