@@ -574,7 +574,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         o.actual_filled = total_filled
         o.actual_notion = total_notion
         o.actual_fee    = total_fee
-        o.price         = o.avg_price
+        o.price         = o.actual_notion / o.actual_filled if o.actual_filled > 0 else px
 
         # shrink reservations
         if o.side == "buy":

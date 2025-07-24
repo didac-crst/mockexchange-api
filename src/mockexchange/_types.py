@@ -254,13 +254,6 @@ class Order:
         return max(self.amount - self.actual_filled, 0.0)
 
     @property
-    def avg_price(self) -> Optional[float]:
-        """Average price of the order (None for market orders)."""
-        if self.actual_filled == 0.0 or self.price is None:
-            return None
-        return self.actual_notion / self.actual_filled
-
-    @property
     def last_history(self) -> Optional[OrderHistory]:
         """Get the last history entry."""
         if self.history and self.history_count >= 0:
