@@ -117,8 +117,9 @@ class ExchangeEngineActor(pykka.ThreadingActor):
     def _uid(self) -> str:
         ts = int(time.time())  # seconds
         raw = f"{int(ts*1000)}_{next(self._oid)}".encode()
-        hash = base64.urlsafe_b64encode(hashlib.md5(raw).digest())[:6].decode() # Remove padding
-        oid = f"{ts:010d}={hash}"
+        hash = base64.urlsafe_b64encode(hashlib.md5(raw).digest()).decode() # Remove padding
+        hash = hash.replace("_", "")[:6]
+        oid = f"{ts:010d}_{hash}"
         return oid
 
     def _reserve(self, asset: str, qty: float) -> None:
