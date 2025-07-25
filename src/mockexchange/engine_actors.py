@@ -391,6 +391,10 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         # set booked values per side
         booked_notion = notion if side == "buy" else 0.0
         status = "new" if enough_funds else "rejected"
+        initial_booked_notion = booked_notion if enough_funds else 0.0
+        reserved_notion_left = booked_notion if enough_funds else 0.0
+        initial_booked_fee = fee if enough_funds else 0.0
+        reserved_fee_left = fee if enough_funds else 0.0
         # open order
         ts = int(time.time() * 1000)
         order = Order(
@@ -403,10 +407,10 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             notion_currency=quote,
             fee_currency=quote,
             fee_rate=self.commission,
-            initial_booked_notion=booked_notion,
-            reserved_notion_left=booked_notion,
-            initial_booked_fee=fee,
-            reserved_fee_left=fee,
+            initial_booked_notion=initial_booked_notion,
+            reserved_notion_left=reserved_notion_left,
+            initial_booked_fee= initial_booked_fee,
+            reserved_fee_left= reserved_fee_left,
             status=status,
             ts_create=ts,
             ts_update=ts,
