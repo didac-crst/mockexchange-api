@@ -66,10 +66,10 @@ then start **MockExchange** as shown above.
 | `CASH_ASSET` | `USDT` | The “cash” currency used by the engine when computing PnL / fees. |
 | `COMMISSION` | `0.00075` | Fee rate (0.075 %). |
 | `TEST_ENV` | `false` | `true` disables auth **and** re-enables `/docs`; tests set this to `True`. |
-| `TICK_LOOP_SEC` | `30` | Scan interval for the background price-tick loop. |
-| `PRUNE_EVERY_SEC` | `3600` | How often the prune job runs (seconds). `0` disables automatic pruning. |
-| `STALE_AFTER_SEC` | `86400` | Age threshold for permanent deletion of *filled* / *canceled* / *partially_canceled* / *expired* / *rejected* orders (seconds). |
-| `EXPIRE_AFTER_SEC` | `172800` | Age threshold for non-traded "OPEN" orders  *new* / *partially_filled* orders (seconds). |
+| `TICK_LOOP_SEC` | `30` | Scan interval for the background price-tick loop (seconds). |
+| `PRUNE_EVERY_MIN` | `60` | How often the prune job runs (minutes). `0` disables automatic pruning. |
+| `STALE_AFTER_H` | `24` | Age threshold for permanent deletion of *filled* / *canceled* / *partially_canceled* / *expired* / *rejected* orders (hours). |
+| `EXPIRE_AFTER_H` | `24` | Age threshold for non-traded "OPEN" orders  *new* / *partially_filled* orders (hours). |
 | `MIN_TIME_ANSWER_ORDER_MARKET` | `3` | Lower bound for artificial latency (seconds) before a market order is filled. |
 | `MAX_TIME_ANSWER_ORDER_MARKET` | `5` | Upper bound for the artificial latency. |
 | `SIGMA_FILL_MARKET_ORDER` | `0.1` | Standard‑deviation parameter that controls the random partial‑fill ratio for simulated market orders – higher values mean more variability and a greater chance of partial fills. |
@@ -93,9 +93,9 @@ CASH_ASSET=USDT
 COMMISSION=0.00075
 TEST_ENV=True
 TICK_LOOP_SEC=30
-PRUNE_EVERY_SEC=3600
-STALE_AFTER_SEC=86400
-EXPIRE_AFTER_SEC=172800
+PRUNE_EVERY_MIN=60
+STALE_AFTER_H=24
+EXPIRE_AFTER_H=24
 MIN_TIME_ANSWER_ORDER_MARKET=3
 MAX_TIME_ANSWER_ORDER_MARKET=5
 SIGMA_FILL_MARKET_ORDER=0.1
