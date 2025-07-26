@@ -303,6 +303,8 @@ class ExchangeEngineActor(pykka.ThreadingActor):
 
         if mismatches:
             logger.error("Reservation mismatches: %s", mismatches)
+        else:
+            logger.info("No reservation mismatches found")
         return mismatches
     # ---------- public API  ------------------------------------------- #
     @property

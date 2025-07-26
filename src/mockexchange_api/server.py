@@ -64,11 +64,17 @@ Implementation notes
 # server.py
 from __future__ import annotations
 
+# Standard library imports
 import asyncio, os, time, redis, socket
 import contextlib
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import List, Literal
+from pathlib import Path
+from dotenv import load_dotenv
+
+# load environment from your project’s .env
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 from pykka import Future
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
@@ -364,19 +370,35 @@ def i_am_leader() -> bool:
 
 async def tick_loop():
     while True:
-        if i_am_leader():
-            for t in ENGINE.tickers.get():
-                ENGINE.process_price_tick(t).get()
-        await asyncio.sleep(REFRESH_S)
+        logger.debug(f"Tick loop started - REFRESH_S: {REFRESH_S} seconds")
+        try:
+            if i_am_leader():
+                for t in ENGINE.tickers.get():
+                    ENGINE.process_price_tick(t).get()
+                # run every REFRESH_S seconds, so we don't hammer Redis
+                logger.debug(f"Tick loop: {REFRESH_S} seconds")
+        except Exception as e:
+            logger.exception("Error in tick_loop: %s", e)
+            # If an error occurs, we log it and continue the loop
+        finally:
+            # As it is a matter of seconds, we can afford to skip 1 tick
+            await asyncio.sleep(REFRESH_S)
 
 
 async def prune_sanity_loop():
     prune_age = timedelta(seconds=STALE_AFTER_SEC)
     expire_age = timedelta(seconds=EXPIRE_AFTER_SEC)
     while True:
-        if i_am_leader():
-            ENGINE.prune_orders_older_than(age=prune_age).get()
-            ENGINE.expire_orders_older_than(age=expire_age).get()
-            ENGINE.check_consistent().get()
-        # run every hour, so we don't hammer Redis
-        await asyncio.sleep(PRUNE_EVERY_SEC)
+        logger.debug(f"Prune sanity loop started - PRUNE_EVERY_SEC: {PRUNE_EVERY_SEC} seconds")
+        try:
+            if i_am_leader():
+                ENGINE.prune_orders_older_than(age=prune_age).get()
+                ENGINE.expire_orders_older_than(age=expire_age).get()
+                ENGINE.check_consistency().get()
+        except Exception as e:
+            logger.exception(f"Error in prune_sanity_loop: {e}")
+            # If an error occurs, we log it and continue the loop
+        finally:
+            # If an error occurs, we will miss one prune cycle.
+            await asyncio.sleep(PRUNE_EVERY_SEC)
+
