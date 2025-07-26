@@ -230,18 +230,33 @@ class Order:
         self.history_count = idx + 1
 
     # Residuals handling -----------------------------------
+    @property
     def residual_base(self) -> float:
         if self.status in CLOSED_STATUS or self.side == "buy":
+            # If the order is closed or a buy order, there are no residuals
+            # This is because buy orders do not have a residual base
             return 0.0
-        return max(self.amount - self.actual_filled, 0.0)
-
+        else:
+            # For sell orders, the residual base is the amount not yet filled
+            # (i.e., the amount that can still be sold)
+            # This is the difference between the total amount and what has been filled
+            return max(self.amount - self.actual_filled, 0.0)
+    
+    @property
     def residual_quote(self) -> float:
         """What’s still reserved in quote currency (USDT) that must be released."""
         if self.status in CLOSED_STATUS:
+            # If the order is closed, there are no residuals
             return 0.0
         if self.side == "buy":
+            # For buy orders, the residual quote is the sum of reserved notion and fee
+            # This is the total value that was reserved for the order but not yet filled
+            # It includes both the notion value and the fee that was reserved
             return max(self.reserved_notion_left, 0.0) + max(self.reserved_fee_left, 0.0)
         else:
+            # For sell orders, the residual quote is the fee that was reserved
+            # This is the fee that was reserved for the order but not yet paid
+            # It does not include the notion value, as it is not reserved for sell orders
             return max(self.reserved_fee_left, 0.0)
 
     def squash_booking(self):

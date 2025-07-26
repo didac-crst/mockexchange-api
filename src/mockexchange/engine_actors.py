@@ -175,10 +175,10 @@ class ExchangeEngineActor(pykka.ThreadingActor):
 
         # release leftovers
         if o.side == "buy":
-            self._release(quote, o.residual_quote())
+            self._release(quote, o.residual_quote)
         else:
-            self._release(base,  o.residual_base())
-            self._release(quote, o.residual_quote())
+            self._release(base,  o.residual_base)
+            self._release(quote, o.residual_quote)
 
         # final order status
         o.status = "canceled" if o.actual_filled == 0 else "partially_canceled"
@@ -232,8 +232,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         fillable_amount: float,
         price: float,
         order_will_close: bool,
-        reserved_notion_left: float,
-        reserved_fee_left: float,
+        residual_quote: float,
     ) -> Dict[str, float]:
         filled_notion = fillable_amount * price
         filled_fee = filled_notion * self.commission
@@ -241,7 +240,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         if order_will_close:
             # If the order will close, we release the still reserved notion + fee
             # This is to avoid mismatches on the used balances
-            self._release(quote, reserved_notion_left + reserved_fee_left)
+            self._release(quote, residual_quote)
         else:
             # If the order will not close, we release only the fillable part
             self._release(quote, filled_notion + filled_fee)
@@ -262,8 +261,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         fillable_amount: float,
         price: float,
         order_will_close: bool,
-        reserved_notion_left: float,
-        reserved_fee_left: float,
+        residual_quote: float,
     ) -> Dict[str, float]:
         filled_notion = fillable_amount * price
         filled_fee = filled_notion * self.commission
@@ -276,7 +274,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         if order_will_close:
             # If the order will close, we release the still reserved fee
             # This is to avoid mismatches on the used balances
-            self._release(quote, reserved_fee_left)
+            self._release(quote, residual_quote)
         else:
             # If the order will not close, we release only the fillable part
             self._release(quote, filled_fee)
@@ -300,11 +298,10 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         for o in open_orders:
             base, quote = o.symbol.split("/")
             if o.side == "buy":
-                expected[quote] += max(o.reserved_notion_left, 0.0)
-                expected[quote] += max(o.reserved_fee_left,    0.0)
+                expected[quote] += max(o.residual_quote, 0.0)
             else:
-                expected[base]  += max(o.residual_base(),      0.0)
-                expected[quote] += max(o.reserved_fee_left,    0.0)
+                expected[base]  += max(o.residual_base,  0.0)
+                expected[quote] += max(o.residual_quote, 0.0)
 
         mismatches = {}
 
@@ -461,12 +458,12 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             raise ValueError("Only *open* orders can be canceled")
         base, quote = o.symbol.split("/")
         if o.side == "buy":
-            rq = o.residual_quote()
+            rq = o.residual_quote
             released_quote = self._release(quote, rq)
             released_base  = 0.0
         else:
-            rb = o.residual_base()
-            rq = o.residual_quote()
+            rb = o.residual_base
+            rq = o.residual_quote
             released_base  = self._release(base, rb)
             released_quote = self._release(quote, rq)
         o.status = "canceled" if o.actual_filled == 0 else "partially_canceled"
@@ -486,7 +483,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             assert o.reserved_notion_left >= -1e-9
             assert o.reserved_fee_left    >= -1e-9
         else:
-            assert o.residual_base()      >= -1e-9
+            assert o.residual_base        >= -1e-9
             assert o.reserved_fee_left    >= -1e-9
 
         return {
@@ -590,8 +587,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             fillable_amount=fillable_amount,
             price=px,
             order_will_close=order_will_close,
-            reserved_notion_left=o.reserved_notion_left,
-            reserved_fee_left=o.reserved_fee_left,
+            residual_quote=o.residual_quote,
         )
         # Calculate the new order state
         ts = int(time.time() * 1000)
@@ -610,23 +606,21 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             o.reserved_notion_left = max(o.reserved_notion_left - tx["filled_notion"], 0.0)
             o.reserved_fee_left    = max(o.reserved_fee_left    - tx["filled_fee"],    0.0)
         else:
-            # sell: only fee was reserved in quote, base reservation shrinks via residual_base()
+            # sell: only fee was reserved in quote, base reservation shrinks via residual_base
             o.reserved_fee_left    = max(o.reserved_fee_left    - tx["filled_fee"],    0.0)
 
-        # free leftovers
-        full = o.actual_filled >= (o.amount - 1e-12)
-        if full:
-            base, quote = o.symbol.split("/")
-            # Any leftovers of reservations -> release here
-            if o.side == "buy":
-                rq = o.residual_quote()
-                if rq > 1e-9:
-                    self._release(quote, rq)
-            else:
-                rb = o.residual_base()
-                rq = o.residual_quote()
-                if rb > 1e-9: self._release(base, rb)
-                if rq > 1e-9: self._release(quote, rq)
+        if order_will_close:
+            # base, quote = o.symbol.split("/")
+            # # Any leftovers of reservations -> release here
+            # if o.side == "buy":
+            #     rq = o.residual_quote
+            #     if rq > 1e-9:
+            #         self._release(quote, rq)
+            # else:
+            #     rb = o.residual_base
+            #     rq = o.residual_quote
+            #     if rb > 1e-9: self._release(base, rb)
+            #     if rq > 1e-9: self._release(quote, rq)
             new_status = "filled"
             o.ts_finish = ts
             o.squash_booking()
@@ -705,10 +699,10 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                     if ts < cutoff:
                         # release leftovers
                         if o.side == "buy":
-                            self._release(quote, o.residual_quote())
+                            self._release(quote, o.residual_quote)
                         else:
-                            self._release(base,  o.residual_base())
-                            self._release(quote, o.residual_quote())
+                            self._release(base,  o.residual_base)
+                            self._release(quote, o.residual_quote)
                         o.status = "expired"
                         o.ts_update = o.ts_finish = now_ms
                         o.reserved_notion_left = 0.0
