@@ -231,11 +231,20 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         quote: str,
         fillable_amount: float,
         price: float,
+        order_will_close: bool,
+        reserved_notion_left: float,
+        reserved_fee_left: float,
     ) -> Dict[str, float]:
         filled_notion = fillable_amount * price
         filled_fee = filled_notion * self.commission
         # Reduce the cash balance
-        self._release(quote, filled_notion + filled_fee)
+        if order_will_close:
+            # If the order will close, we release the still reserved notion + fee
+            # This is to avoid mismatches on the used balances
+            self._release(quote, reserved_notion_left + reserved_fee_left)
+        else:
+            # If the order will not close, we release only the fillable part
+            self._release(quote, filled_notion + filled_fee)
         cash = self.portfolio.get(quote).get()
         cash.free -= (filled_notion + filled_fee)
         self.portfolio.set(cash)
@@ -252,6 +261,9 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         quote: str,
         fillable_amount: float,
         price: float,
+        order_will_close: bool,
+        reserved_notion_left: float,
+        reserved_fee_left: float,
     ) -> Dict[str, float]:
         filled_notion = fillable_amount * price
         filled_fee = filled_notion * self.commission
@@ -261,7 +273,13 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         asset.free -= fillable_amount
         self.portfolio.set(asset)
         # Increase the cash balance
-        self._release(quote, filled_fee)
+        if order_will_close:
+            # If the order will close, we release the still reserved fee
+            # This is to avoid mismatches on the used balances
+            self._release(quote, reserved_fee_left)
+        else:
+            # If the order will not close, we release only the fillable part
+            self._release(quote, filled_fee)
         cash = self.portfolio.get(quote).get()
         cash.free += (filled_notion - filled_fee)
         self.portfolio.set(cash)
@@ -508,8 +526,10 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         amount_available = self._slippage_simulate(total_amount_available, SIGMA_FILL)
         if amount_available < need_amount:
             fillable_amount = amount_available
+            order_will_close = False
         else:
             fillable_amount = need_amount
+            order_will_close = True
         if fillable_amount <= 0:
             return
         if o.type == "market":
@@ -560,7 +580,6 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                     ),
                 )
                 return
-
         tx = (
             self._execute_buy
             if o.side == "buy"
@@ -570,6 +589,9 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             quote=quote,
             fillable_amount=fillable_amount,
             price=px,
+            order_will_close=order_will_close,
+            reserved_notion_left=o.reserved_notion_left,
+            reserved_fee_left=o.reserved_fee_left,
         )
         # Calculate the new order state
         ts = int(time.time() * 1000)
