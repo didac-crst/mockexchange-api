@@ -399,9 +399,8 @@ async def prune_and_expire_loop():
             if i_am_leader():
                 ENGINE.prune_orders_older_than(age=prune_age).get()
                 ENGINE.expire_orders_older_than(age=expire_age).get()
-                ENGINE.check_consistency().get()
         except Exception as e:
-            logger.exception(f"Error in prune_sanity_loop: {e}")
+            logger.exception(f"Error in prune_and_expire_loop: {e}")
             # If an error occurs, we log it and continue the loop
         finally:
             # If an error occurs, we will miss one prune cycle.
