@@ -672,17 +672,29 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         now_ms = int(time.time() * 1000)
         cutoff = now_ms - int(age.total_seconds() * 1000)
         expired = 0
+        comment="Order expired due to inactivity"
         for s in OPEN_STATUS:
             for o in self.order_book.list(status=s).get():
                 if o.status in OPEN_STATUS:
+                    base, quote = o.symbol.split("/")
                     ts = o.ts_update
                     if ts < cutoff:
+                        # release leftovers
+                        if o.side == "buy":
+                            self._release(quote, o.residual_quote())
+                        else:
+                            self._release(base,  o.residual_base())
+                            self._release(quote, o.residual_quote())
                         o.status = "expired"
+                        o.ts_update = ts
                         o.ts_finish = ts
+                        o.reserved_notion_left = 0.0
+                        o.reserved_fee_left = 0.0
+                        o.comment = comment
                         o.add_history(
                             ts=ts,
                             status="expired",
-                            comment="Order expired due to inactivity"
+                            comment=comment,
                         )
                         self.order_book.update(o)
                         self._log_order(o)
