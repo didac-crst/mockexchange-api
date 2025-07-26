@@ -123,6 +123,7 @@ COMMISSION = float(os.getenv("COMMISSION", "0.0"))
 PRUNE_EVERY_SEC = int(float(os.getenv("PRUNE_EVERY_MIN", "60")) * 60)
 STALE_AFTER_SEC = int(float(os.getenv("STALE_AFTER_H", "24")) * 3600)
 EXPIRE_AFTER_SEC = int(float(os.getenv("EXPIRE_AFTER_H", "24")) * 3600)
+SANITY_CHECK_EVERY_SEC = int(float(os.getenv("SANITY_CHECK_EVERY_MIN", 5)) * 60)
 
 ENGINE = start_engine(redis_url=REDIS_URL, commission=COMMISSION)
 
@@ -143,9 +144,10 @@ prod_depends = [] if TEST_ENV else [Depends(verify_key)]
 @asynccontextmanager
 async def lifespan(app):
     tick_task = asyncio.create_task(tick_loop())
-    prune_task = asyncio.create_task(prune_sanity_loop())
+    prune_task = asyncio.create_task(prune_and_expire_loop())
+    sanity_task = asyncio.create_task(sanity_loop())
     yield
-    for t in (tick_task, prune_task):
+    for t in (tick_task, prune_task, sanity_task):
         t.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await t
@@ -388,11 +390,11 @@ async def tick_loop():
             await asyncio.sleep(REFRESH_S)
 
 
-async def prune_sanity_loop():
+async def prune_and_expire_loop():
     prune_age = timedelta(seconds=STALE_AFTER_SEC)
     expire_age = timedelta(seconds=EXPIRE_AFTER_SEC)
     while True:
-        logger.debug(f"Prune sanity loop started - PRUNE_EVERY_SEC: {PRUNE_EVERY_SEC} seconds")
+        logger.debug(f"Prune and expire loop started - PRUNE_EVERY_SEC: {PRUNE_EVERY_SEC} seconds")
         try:
             if i_am_leader():
                 ENGINE.prune_orders_older_than(age=prune_age).get()
@@ -405,3 +407,15 @@ async def prune_sanity_loop():
             # If an error occurs, we will miss one prune cycle.
             await asyncio.sleep(PRUNE_EVERY_SEC)
 
+async def sanity_loop():
+    while True:
+        logger.debug(f"Sanity loop started - SANITY_CHECK_EVERY_SEC: {SANITY_CHECK_EVERY_SEC} seconds")
+        try:
+            if i_am_leader():
+                ENGINE.check_consistency().get()
+        except Exception as e:
+            logger.exception(f"Error in sanity_loop: {e}")
+            # If an error occurs, we log it and continue the loop
+        finally:
+            # If an error occurs, we will miss one prune cycle.
+            await asyncio.sleep(SANITY_CHECK_EVERY_SEC)
