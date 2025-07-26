@@ -114,9 +114,9 @@ MY_ID = f"{socket.gethostname()}:{os.getpid()}"
 TEST_ENV = os.getenv("TEST_ENV", "FALSE").lower() in ("1", "true", "yes")
 API_KEY = os.getenv("API_KEY", "invalid-key")
 COMMISSION = float(os.getenv("COMMISSION", "0.0"))
-PRUNE_EVERY_SEC = int(os.getenv("PRUNE_EVERY_MIN", "60")) * 60
-STALE_AFTER_SEC = int(os.getenv("STALE_AFTER_H", "24")) * 3600
-EXPIRE_AFTER_SEC = int(os.getenv("EXPIRE_AFTER_H", "24")) * 3600
+PRUNE_EVERY_SEC = int(float(os.getenv("PRUNE_EVERY_MIN", "60")) * 60)
+STALE_AFTER_SEC = int(float(os.getenv("STALE_AFTER_H", "24")) * 3600)
+EXPIRE_AFTER_SEC = int(float(os.getenv("EXPIRE_AFTER_H", "24")) * 3600)
 
 ENGINE = start_engine(redis_url=REDIS_URL, commission=COMMISSION)
 
