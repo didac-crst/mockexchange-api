@@ -688,13 +688,12 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                             self._release(base,  o.residual_base())
                             self._release(quote, o.residual_quote())
                         o.status = "expired"
-                        o.ts_update = ts
-                        o.ts_finish = ts
+                        o.ts_update = o.ts_finish = now_ms
                         o.reserved_notion_left = 0.0
                         o.reserved_fee_left = 0.0
                         o.comment = comment
                         o.add_history(
-                            ts=ts,
+                            ts=now_ms,
                             status="expired",
                             comment=comment,
                         )
