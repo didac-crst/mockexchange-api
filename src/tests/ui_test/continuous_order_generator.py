@@ -1,33 +1,16 @@
 # continuous_order_generator.py
 
-from __future__ import annotations
-
-from dotenv import load_dotenv
-import os, time, random, requests
+import os, time, random
+import httpx
 from math import floor, log10
 from typing import Final
-from .conftest import client
-from .helpers import (
-    reset_and_fund,
-    place_order,
-    get_tickers,
-    get_last_price,
-)
 
-# --------------------------------------------------------------------------- #
-# Scenario constants – tweak here, not in the test logic
-# --------------------------------------------------------------------------- #
+from helpers import reset_and_fund, get_tickers, place_order, get_last_prices
 
-# Number of orders to send per batch (randomized between these)
-MIN_ORDERS_PER_BATCH = 1
-MAX_ORDERS_PER_BATCH = 5
-# Sleep interval between batches (in seconds)
-MIN_SLEEP = 10.0
-MAX_SLEEP = 30.0
-
-QUOTE: Final[str] = "USDT"
-FUNDING_AMOUNT: Final[float] = 50_000.0  # initial USDT bankroll
-ASSETS_TO_BUY: Final[list[str]] = [  # majors we accumulate
+BASE_URL = os.getenv("URL_API", "http://localhost:8000")
+QUOTE = "USDT"
+FUNDING_AMOUNT: Final[float] = 100_000
+BASE_ASSETS_TO_BUY: Final[list[str]] = [  # majors we accumulate
     "BTC",
     "ETH",
     "SOL",
@@ -42,10 +25,29 @@ TRADING_TYPES = ["market", "limit"]  # order types we can place
 
 SIDES = ["buy", "sell"]
 
+# Number of orders to send per batch (randomized between these)
+MIN_ORDERS_PER_BATCH = 1
+MAX_ORDERS_PER_BATCH = 5
+# Sleep interval between batches (in seconds)
+MIN_SLEEP = 10.0
+MAX_SLEEP = 30.0
+# Amount/Balance ratio to use for each order
+MIN_AMOUNT_RATIO = 0.01
+MAX_AMOUNT_RATIO = 0.05
 
-# Helper to fetch last price
 
-def floor_to_first_sig(x: float) -> float:
+# Helpers:
+def _get_tickers_to_trade(client) -> list[str]:
+    # Get the list of defined tickers + the extra ones we want to buy.
+    tickers_list = get_tickers(client)
+    tickers_to_trade = [f"{a}/{QUOTE}" for a in BASE_ASSETS_TO_BUY]
+    extra_tickers = [t for t in tickers_list if t not in tickers_to_trade]
+    extra_tickers = random.sample(extra_tickers, NUM_EXTRA_ASSETS)
+    tickers_to_trade.extend(extra_tickers)
+    return tickers_to_trade
+
+
+def _floor_to_first_sig(x: float) -> float:
     """
     Round **down** to the most-significant digit, zeroing everything else.
 
@@ -71,67 +73,54 @@ def floor_to_first_sig(x: float) -> float:
     first_digit = floor(ax / 10**d)
     return sign * first_digit * 10**d
 
-def get_tickers_to_trade(client) -> list[str]:
-    # Get the list of defined tickers + the extra ones we want to buy.
-    tickers_list = get_tickers(client)
-    tickers_to_trade = [f"{a}/{QUOTE}" for a in ASSETS_TO_BUY]
-    extra_tickers = [t for t in tickers_list if t not in tickers_to_trade]
-    extra_tickers = random.sample(extra_tickers, NUM_EXTRA_ASSETS)
-    tickers_to_trade.extend(extra_tickers)
 
-
-# Main loop: continuously generate orders
 def main():
-    mockX_client = client()
+    # create your own client
+    with httpx.Client(base_url=BASE_URL, timeout=20.0) as client:
+        # seed the wallet once
+        reset_and_fund(client, QUOTE, FUNDING_AMOUNT)
 
-    reset_and_fund(mockX_client, QUOTE, FUNDING_AMOUNT)
+        tickers = _get_tickers_to_trade(client)
+        while True:
+            last_balances = client.get("/balance").json()
+            trade_numbers = random.randint(MIN_ORDERS_PER_BATCH, MAX_ORDERS_PER_BATCH)
+            tickers_batch = random.sample(tickers, trade_numbers)
+            last_prices = get_last_prices(client, tickers_batch)
+            for symbol in tickers_batch:
+                # pick a random ticker and random payload
+                asset = symbol.split("/")[0]
+                side = random.choice(SIDES)
+                order_type = random.choice(TRADING_TYPES)
+                if side == "sell" and asset not in last_balances:
+                    # No asset to sell, buy it instead
+                    side = "buy"
+                random_ratio = random.uniform(MIN_AMOUNT_RATIO, MAX_AMOUNT_RATIO)
+                if side == "buy":
+                    cash_balance = last_balances[QUOTE]["free"]
+                    notional_to_use = cash_balance * random_ratio
+                    amount = notional_to_use / last_prices[symbol]
+                    amount = _floor_to_first_sig(amount)
 
-    # headers = {}
+                else:
+                    asset_balance = last_balances[asset]["free"]
+                    amount = asset_balance * random_ratio
+                    amount = _floor_to_first_sig(amount)
+                limit_price = last_prices[symbol] * random.gauss(1.0, 0.0005)
+                order = place_order(
+                    client,
+                    {
+                        "symbol": symbol,
+                        "side": side,
+                        "type": order_type,
+                        "amount": amount,
+                        "limit_price": limit_price,
+                    },
+                )
+                print(
+                    f"Status: {order['status']} / Asset: {order['symbol']} / Side: {order['side']} / Type: {order['type']} / Amount: {order['amount']} / Notional: {order['initial_booked_notion']} / Limit Price: {order['limit_price']}"
+                )
+            time.sleep(random.uniform(MIN_SLEEP, MAX_SLEEP))
 
-
-
-    # print("Starting order fuzzer. Press Ctrl+C to stop.")
-    # try:
-    #     while True:
-    #         n_orders = random.randint(MIN_ORDERS_PER_BATCH, MAX_ORDERS_PER_BATCH)
-    #         print(f"Sending batch of {n_orders} orders...")
-    #         for _ in range(n_orders):
-    #             symbol = random.choice(ASSETS)
-    #             side = random.choice(["buy", "sell"])
-    #             price = get_last_price(symbol)
-    #             # Allocate a random notion between 10 and 100 units
-    #             notion = random.uniform(10, 100)
-    #             qty = floor(notion / price) if price > 0 else 1
-    #             if qty < 1:
-    #                 qty = 1
-    #             # Choose type
-    #             order_type = random.choice(["market", "limit"])
-    #             limit_price = None
-    #             if order_type == "limit":
-    #                 # set limit slightly favorable
-    #                 if side == "buy":
-    #                     limit_price = price * random.uniform(0.995, 0.999)
-    #                 else:
-    #                     limit_price = price * random.uniform(1.001, 1.005)
-    #             payload = {
-    #                 "symbol": symbol,
-    #                 "side": side,
-    #                 "type": order_type,
-    #                 "amount": qty,
-    #                 "limit_price": limit_price,
-    #             }
-    #             try:
-    #                 r = requests.post(f"{API_BASE}/orders", json=payload, headers=headers, timeout=5)
-    #                 r.raise_for_status()
-    #                 order = r.json()
-    #                 print(f"→ Created {order_type.upper()} {side} order: {order['id']} ({qty} @ {limit_price or 'MKT'})")
-    #             except Exception as e:
-    #                 print(f"! Error placing order: {e}")
-    #         sleep_time = random.uniform(MIN_SLEEP, MAX_SLEEP)
-    #         print(f"Sleeping {sleep_time:.2f}s before next batch...\n")
-    #         time.sleep(sleep_time)
-    # except KeyboardInterrupt:
-    #     print("Order fuzzer stopped by user.")
 
 if __name__ == "__main__":
     main()
