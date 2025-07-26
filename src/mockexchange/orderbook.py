@@ -47,8 +47,9 @@ class OrderBook:
     def get(self, oid: str, *, include_history: bool = False) -> Order:
         blob = self.r.hget(self.HASH_KEY, oid)
         if blob is None:
-            raise KeyError(f"order {oid} not found")
-        return Order.from_json(blob, include_history=include_history)
+            raise ValueError(f"Order {oid} not found")
+        else:
+            return Order.from_json(blob, include_history=include_history)
 
     def list(
         self,

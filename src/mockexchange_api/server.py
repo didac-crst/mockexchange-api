@@ -267,9 +267,12 @@ def get_order(
     include_history: bool = Query(
         False, description="Include order history in response"
     ),
-):
-    o = _g(ENGINE.order_book.get().get(oid, include_history=include_history))
-    return o.to_dict(include_history=include_history)
+):  
+    try:
+        o = _g(ENGINE.order_book.get().get(oid, include_history=include_history))
+        return o.to_dict(include_history=include_history)
+    except ValueError as e:
+        return {"error": str(e)}
 
 
 @app.post("/orders", tags=["Orders"], dependencies=prod_depends)
@@ -281,7 +284,7 @@ def new_order(req: OrderReq):
     try:
         return _g(ENGINE.create_order_async(**req.model_dump()))
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        return {"error": str(e)}
 
 
 @app.post("/orders/can_execute", tags=["Orders"])
@@ -302,7 +305,7 @@ def cancel(oid: str):
         return _g(ENGINE.cancel_order(oid))
     except ValueError as e:
         # 400 = client made a bad request (nothing wrong with the server)
-        raise HTTPException(status_code=400, detail=str(e))
+        return {"error": str(e)}
 
 
 # admin ------------------------------------------------------------------ #
