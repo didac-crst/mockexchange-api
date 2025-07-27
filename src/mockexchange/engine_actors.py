@@ -829,7 +829,6 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         open_orders_pd["cash_frozen_value"] = (
             open_orders_pd["reserved_notion_left"] + open_orders_pd["reserved_fee_left"]
         )
-        logger.info(f"Open orders: /n{open_orders_pd.to_dict(orient='records')}")
         open_orders_pd = open_orders_pd[["assets_frozen_value", "cash_frozen_value"]]
         open_orders_pd_summary = open_orders_pd.sum(numeric_only=True)
         orders_frozen_value = open_orders_pd_summary.to_dict()
