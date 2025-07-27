@@ -342,10 +342,17 @@ mockexchange-api/
 
 ## Front‑end dashboard
 
-If you prefer a GUI, check the companion repo **mockexchange‑deck**  
-<https://github.com/didac-crst/mockexchange-deck>.
+If you prefer a GUI, check the companion repo [**mockexchange‑deck**](https://github.com/didac-crst/mockexchange-deck).
 
 It’s a single‑user Streamlit dashboard that shows your balances and existing orders.
+
+---
+
+## Gateway
+
+If your scripts need a CCXT-like interface to talk to mockexchange-api, [**mockexchange‑gateway**](https://github.com/didac-crst/mockexchange-gateway) has you covered:
+* Market data, balances, order lifecycle, dry-run
+* Minimal surface — logic stays server-side, so your code remains swappable with real exchanges
 
 ---  
 
