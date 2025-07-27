@@ -184,11 +184,6 @@ def all_tickers():
     return ENGINE.tickers.get()
 
 
-# @app.get("/tickers/{ticker:path}", tags=["Market"])
-# def ticker(ticker: str = "BTC/USDT"):
-#     return _g(ENGINE.fetch_ticker(ticker))
-
-
 @app.get("/tickers/{symbols:path}", tags=["Market"])
 def ticker(symbols: str = "BTC/USDT"):
     """Return one ticker (str) or many tickers (comma-separated list).
@@ -308,6 +303,13 @@ def cancel(oid: str):
     except ValueError as e:
         # 400 = client made a bad request (nothing wrong with the server)
         return {"error": str(e)}
+
+
+# overview --------------------------------------------------------------- #
+@app.get("/overview/assets", tags=["Overview"])
+def get_summary_assets():
+    sum_assets_bal = _g(ENGINE.get_summary_assets())
+    return sum_assets_bal
 
 
 # admin ------------------------------------------------------------------ #

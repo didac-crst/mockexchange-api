@@ -15,6 +15,7 @@ import math
 import pykka
 import logging
 import redis
+import pandas as pd
 
 from .market import Market
 from .orderbook import OrderBook
@@ -738,6 +739,143 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             ok = have >= amount
             reason = None if ok else f"need {amount:.8f} {base}, have {have:.8f}"
         return {"ok": ok, "reason": reason}
+    
+    # ----- overview helpers --------------------------------------------- #
+
+    def _get_assetslist_and_tickerslist_from_portfolio(self,
+                                              portfolio: dict[str, AssetBalance]
+                                                ) -> tuple[list[str], list[str]]:
+        """ Get a list of assets and their tickers from the portfolio.
+        This function extracts the assets from the portfolio, EXCLUDING the cash asset.
+        It returns a tuple of two lists: the first list contains the asset names,
+        the second list contains the asset tickers.
+        """
+        assets_list = [a for a in portfolio.keys() if a != self.cash_asset]
+        tickers_list = [f"{a}/{self.cash_asset}" for a in assets_list]
+        if not assets_list:
+            logger.warning("No assets found in portfolio, returning empty lists")
+            return ([], [])
+        return (assets_list, tickers_list)
+
+    def _get_summary_assets_balance(self, portfolio: dict[str, AssetBalance], prices: dict[str, float]) -> dict[str, dict[str, float]]:
+        """ Get a summary of the assets in the portfolio.
+        This function calculates the total value of all assets in the portfolio.
+        It returns a dict with the total value of each asset, including cash.
+        The values are calculated based on the prices of the assets in the portfolio.
+        If there are no assets in the portfolio, it returns a dict with all values set to 0.0.
+        """
+        _assets = dict()
+        assets_list, tickers_list = self._get_assetslist_and_tickerslist_from_portfolio(portfolio)
+        cash = portfolio.get(self.cash_asset, {"free": 0.0, "used": 0.0})
+        for a, t in zip(assets_list, tickers_list):
+            asset_balance = dict()
+            if a == self.cash_asset:
+                continue
+            if prices.get(t) is None:
+                logger.warning("No price for asset %s, skipping", t)
+                continue
+            asset_balance["free"] = portfolio[a].get("free", 0.0)
+            asset_balance["used"] = portfolio[a].get("used", 0.0)
+            asset_balance["price"] = prices[t]
+            _assets[a] = asset_balance
+        # Convert to pandas to vector operations
+        assets_pd = pd.DataFrame(_assets).T
+        assets_pd["assets_free_value"] = assets_pd["free"] * assets_pd["price"]
+        assets_pd["assets_frozen_value"] = assets_pd["used"] * assets_pd["price"]
+        assets_pd["assets_total_value"] = assets_pd["assets_free_value"] + assets_pd["assets_frozen_value"]
+        assets_pd.drop(columns=["free", "used", "price"], inplace=True)
+        assets_pd_summary = assets_pd.sum(numeric_only=True)
+        balance_value = assets_pd_summary.to_dict()
+        balance_value["cash_free_value"] = cash.get("free", 0.0)
+        balance_value["cash_frozen_value"] = cash.get("used", 0.0)
+        balance_value["cash_total_value"] = (
+            balance_value["cash_free_value"] + balance_value["cash_frozen_value"]
+        )
+        balance_value["total_free_value"] = (
+            balance_value["cash_free_value"] + balance_value["assets_free_value"]
+        )
+        balance_value["total_frozen_value"] = (
+            balance_value["cash_frozen_value"] + balance_value["assets_frozen_value"]
+        )
+        balance_value["total_equity"] = (
+            balance_value["cash_total_value"] + balance_value["assets_total_value"]
+        )
+        return balance_value
+
+    def _get_summary_assets_orders(self, open_orders: list[Order], prices: dict[str, float]) -> dict[str, dict[str, float]]:
+        """ Get a summary of the frozen assets in open orders.
+        This function calculates the total value of reserved assets and fees in open orders.
+        It returns a dict with the total reserved value of assets and quotes, and the total frozen value.
+        The values are calculated based on the prices of the assets in the open orders.
+        If there are no open orders, it returns a dict with all values set to 0.0.
+        """
+        RELEVANT_COLS = [
+            "symbol", "side", "amount", "actual_filled", "reserved_notion_left", "reserved_fee_left"
+        ]
+        if not open_orders:
+            return {
+                "assets_frozen_value": 0.0,
+                "cash_frozen_value": 0.0,
+                "total_frozen_value": 0.0
+            }
+        open_orders_pd = pd.DataFrame([o.to_dict() for o in open_orders])
+        open_orders_pd = open_orders_pd[RELEVANT_COLS]
+        open_orders_pd["price"] = open_orders_pd["symbol"].map(prices)
+        # We need to calculate the reserved assets, but this only makes sense for SELL orders.
+        open_orders_pd["assets_frozen_value"] = 0.0
+        open_orders_pd.loc[open_orders_pd["side"] == "sell", "assets_frozen_value"] = (
+            open_orders_pd["amount"] - open_orders_pd["actual_filled"]
+        ) * open_orders_pd["price"]
+        open_orders_pd["cash_frozen_value"] = (
+            open_orders_pd["reserved_notion_left"] + open_orders_pd["reserved_fee_left"]
+        )
+        logger.info(f"Open orders: /n{open_orders_pd.to_dict(orient='records')}")
+        open_orders_pd = open_orders_pd[["assets_frozen_value", "cash_frozen_value"]]
+        open_orders_pd_summary = open_orders_pd.sum(numeric_only=True)
+        orders_frozen_value = open_orders_pd_summary.to_dict()
+        orders_frozen_value["total_frozen_value"] = (
+            orders_frozen_value["assets_frozen_value"] + orders_frozen_value["cash_frozen_value"]
+        )
+        logger.info(f"Open orders: /n{orders_frozen_value}")
+        return orders_frozen_value
+
+    def get_summary_assets(self) -> Dict[str, Dict[str, float | str | bool]]:
+        """
+        Get a summary of all value assets in the portfolio and frozen assets in open orders.
+        """
+        # To be sure that we have the same price on both balance and orders, we want to fetch the latest prices
+        # only once. Therefore, we need to prepare the portfolio and orders first.
+        # Portfolio data:
+        portfolio = self.fetch_balance()
+        tickers_list_portfolio = self._get_assetslist_and_tickerslist_from_portfolio(portfolio)[1]
+        # Get open orders and their tickers
+        open_orders = self.order_book.list(status=OPEN_STATUS, include_history=False).get()
+        tickers_list_orders = [o.symbol for o in open_orders]
+        # My expectation is that all open orders tickers are also in the portfolio,
+        # but I am not sure if this is always the case.
+        tickers_list = list(set(tickers_list_portfolio + tickers_list_orders))
+        # Now we can fetch the prices for all tickers
+        prices = {t: self.market.last_price(t).get() for t in tickers_list}
+        output = dict()
+        output['balance_source'] = self._get_summary_assets_balance(portfolio, prices)
+        output['orders_source'] = self._get_summary_assets_orders(open_orders, prices)
+        b_source = output['balance_source']
+        o_source = output['orders_source']
+        # Check for mismatches between balance and orders
+        _mismatch = False
+        TOLERANCE = 1e-3 # in cash value units (e.g. 0.001 USDT)
+        for k in o_source.keys():
+            o_val = o_source[k]
+            b_val = b_source.get(k, 0.0)
+            if not math.isclose(o_val, b_val, rel_tol=0.0, abs_tol=TOLERANCE):
+                _mismatch = True
+                break
+
+        output['misc'] = {
+            "cash_asset": self.cash_asset,
+            "mismatch": _mismatch,
+        }
+        return output
 
     # ----- admin helpers ---------------------------------------------------- #
     def set_balance(self, asset: str, *, free: float = 0.0, used: float = 0.0):
