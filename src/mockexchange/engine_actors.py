@@ -780,11 +780,20 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             _assets[a] = asset_balance
         # Convert to pandas to vector operations
         assets_pd = pd.DataFrame(_assets).T
-        assets_pd["assets_free_value"] = assets_pd["free"] * assets_pd["price"]
-        assets_pd["assets_frozen_value"] = assets_pd["used"] * assets_pd["price"]
-        assets_pd["assets_total_value"] = assets_pd["assets_free_value"] + assets_pd["assets_frozen_value"]
-        assets_pd.drop(columns=["free", "used", "price"], inplace=True)
-        assets_pd_summary = assets_pd.sum(numeric_only=True)
+        # If there are no assets, return a dict with all values set to 0.0
+        if assets_pd.empty:
+            _tmp_assets_dict = {
+                "assets_free_value": 0.0,
+                "assets_frozen_value": 0.0,
+                "assets_total_value": 0.0,
+            }
+            assets_pd_summary = pd.Series(_tmp_assets_dict)
+        else:
+            assets_pd["assets_free_value"] = assets_pd["free"] * assets_pd["price"]
+            assets_pd["assets_frozen_value"] = assets_pd["used"] * assets_pd["price"]
+            assets_pd["assets_total_value"] = assets_pd["assets_free_value"] + assets_pd["assets_frozen_value"]
+            assets_pd.drop(columns=["free", "used", "price"], inplace=True)
+            assets_pd_summary = assets_pd.sum(numeric_only=True)
         balance_value = assets_pd_summary.to_dict()
         balance_value["cash_free_value"] = cash.get("free", 0.0)
         balance_value["cash_frozen_value"] = cash.get("used", 0.0)
@@ -835,7 +844,6 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         orders_frozen_value["total_frozen_value"] = (
             orders_frozen_value["assets_frozen_value"] + orders_frozen_value["cash_frozen_value"]
         )
-        logger.info(f"Open orders: /n{orders_frozen_value}")
         return orders_frozen_value
 
     def get_summary_assets(self) -> Dict[str, Dict[str, float | str | bool]]:
