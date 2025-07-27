@@ -861,14 +861,15 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         b_source = output['balance_source']
         o_source = output['orders_source']
         # Check for mismatches between balance and orders
-        _mismatch = False
+        _mismatch = dict()
         TOLERANCE = 1e-3 # in cash value units (e.g. 0.001 USDT)
         for k in o_source.keys():
             o_val = o_source[k]
             b_val = b_source.get(k, 0.0)
-            if not math.isclose(o_val, b_val, rel_tol=0.0, abs_tol=TOLERANCE):
-                _mismatch = True
-                break
+            if math.isclose(o_val, b_val, rel_tol=0.0, abs_tol=TOLERANCE):
+                _mismatch[k] = False
+            else:
+                _mismatch[k] = True
 
         output['misc'] = {
             "cash_asset": self.cash_asset,
