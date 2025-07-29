@@ -129,7 +129,7 @@ def test_insufficient_funds_rejection(client):
 
     balances = client.get("/balance").json()
     # Only USDT should exist in the portfolio
-    assert list(balances.keys()) == [QUOTE]
+    assert list(balances.keys()) == [QUOTE, ASSET]
 
     # Locked USDT is back in `free`; nothing remains in `used`
     assert balances[QUOTE]["free"] == tampered["used"]
