@@ -36,7 +36,7 @@ import time
 
 import pytest
 
-from helpers import (
+from .helpers import (
     reset_and_fund,
     get_last_price,
 )

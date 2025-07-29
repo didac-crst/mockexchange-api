@@ -34,7 +34,7 @@ import time
 from math import isclose
 from typing import Dict
 
-from helpers import (
+from .helpers import (
     assert_no_locked_funds,
     engine_latency,
     get_tickers,

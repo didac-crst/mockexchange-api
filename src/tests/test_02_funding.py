@@ -19,7 +19,7 @@ portfolio will be unreliable, so we surface the problem early.
 # --------------------------------------------------------------------------- #
 # Imports & helpers
 # --------------------------------------------------------------------------- #
-from helpers import reset_and_fund
+from .helpers import reset_and_fund
 
 
 # --------------------------------------------------------------------------- #

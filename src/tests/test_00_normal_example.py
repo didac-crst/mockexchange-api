@@ -24,7 +24,7 @@ import math
 import random
 from typing import Final
 
-from helpers import (
+from .helpers import (
     reset_and_fund,
     place_order,
     get_tickers,

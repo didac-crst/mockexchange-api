@@ -32,7 +32,7 @@ broken.
 # Imports & helpers
 # --------------------------------------------------------------------------- #
 from xmlrpc import client
-from helpers import reset_and_fund  # deletes state & funds ONE asset
+from .helpers import reset_and_fund  # deletes state & funds ONE asset
 from math import isclose
 
 # --------------------------------------------------------------------------- #

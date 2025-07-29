@@ -3,7 +3,7 @@
 from __future__ import annotations
 import os, pytest, httpx
 from dotenv import load_dotenv
-from helpers import reset_and_fund
+from .helpers import reset_and_fund
 
 load_dotenv()  # load .env → os.environ
 

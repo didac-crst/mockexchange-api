@@ -37,7 +37,7 @@ import random
 import time
 from math import isclose
 
-from helpers import (
+from .helpers import (
     assert_no_locked_funds,
     get_last_price,
     get_tickers,
