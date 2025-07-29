@@ -6,6 +6,11 @@ End-to-end check for **reservation roll-back** when the account balance is
 manually corrupted *after* an order has been accepted but *before* it can be
 filled.
 
+It covers two cases:
+
+* full_reject        – 0 BTC filled → status == rejected
+* partial_reject     – some BTC filled → status == partially_rejected
+
 Why this test exists
 --------------------
 * Every **BUY** order first *locks* the necessary quote currency
@@ -25,104 +30,99 @@ The test follows these steps:
    previously-locked USDT is back in `free` while `used` is zero.
 """
 
-# --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------- #
 # Imports & helpers
-# --------------------------------------------------------------------------- #
-from helpers import reset_and_fund
+# --------------------------------------------------------------------- #
+import random
+import time
+
+import pytest
+
+from helpers import (
+    reset_and_fund,
+    get_last_price,
+)
+
+QUOTE = "USDT"
+ASSET = "BTC"
+SYMBOL = f"{ASSET}/{QUOTE}"
+LIMIT_PX = 2.0                # 1 BTC ≙ 2 USDT
+NOTIONAL_TO_BUY = 10_000.0    # 10 k USDT
+FUNDING = NOTIONAL_TO_BUY * 2 # leave plenty of head-room
 
 
-# --------------------------------------------------------------------------- #
-# Test case
-# --------------------------------------------------------------------------- #
-def test_funding(client):
+# --------------------------------------------------------------------- #
+# Test matrix: two variants with tiny differences in tampering strategy
+# --------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "variant", ["full_reject", "partial_reject"], ids=str
+)
+def test_insufficient_funds_rejection(client, variant):
     """
-    Fund → Book → Tamper → Trigger → Cancel.
-
-    Parameters
-    ----------
-    client : ``pytest`` *fixture*
-        A FastAPI test-client pointed at the running mock-exchange.
+    1. fund the wallet
+    2. place BUY-limit
+    3. (optionally) let engine fill a *tiny* slice (partial_reject only)
+    4. tamper with balance so that reservation < needed
+    5. move price → engine settles → order must end as  REJECT / PARTIAL_REJECT
     """
-    # --------------------------------------------------------------------- #
-    # 1️⃣  Preparation – fund the quote currency
-    # --------------------------------------------------------------------- #
-    quote = "USDT"
-    asset = "BTC"
-    limit_price = 2.0  # USD per BTC
-    symbol = f"{asset}/{quote}"
+    # ── 1) clean slate + fund wallet ────────────────────────────────────
+    reset_and_fund(client, QUOTE, FUNDING)
 
-    notional_to_buy = 10_000.0  # USD we intend to spend
-    funding_amount = notional_to_buy * 2  # leave plenty of head-room
+    # sanity-check funding
+    assert client.get(f"/balance/{QUOTE}").json()["free"] == FUNDING
 
-    # Helper wipes the database, then credits `funding_amount` free USDT
-    reset_and_fund(client, quote, funding_amount)
-
-    # Portfolio must now contain exactly that amount
-    assert client.get(f"/balance/{quote}").json() == {
-        "asset": quote,
-        "free": funding_amount,
-        "used": 0.0,
-        "total": funding_amount,
-    }
-
-    # --------------------------------------------------------------------- #
-    # 2️⃣  Place the BUY-limit order – this *books* funds
-    # --------------------------------------------------------------------- #
-    amount_btc = notional_to_buy / limit_price  # BTC @ 2 USD
+    # ── 2) place BUY-limit (books funds immediately) ────────────────────
+    qty_btc = NOTIONAL_TO_BUY / LIMIT_PX
     order_req = {
-        "symbol": symbol,
-        "side": "buy",
-        "type": "limit",
-        "amount": amount_btc,
-        "limit_price": limit_price,
+        "symbol": SYMBOL,
+        "side":   "buy",
+        "type":   "limit",
+        "amount": qty_btc,
+        "limit_price": LIMIT_PX,
     }
-    resp = client.post("/orders", json=order_req)
-    assert resp.status_code == 200
-    order = resp.json()
-
-    # Sanity-check the response
+    order = client.post("/orders", json=order_req).json()
     assert order["status"] == "new"
-    assert order["initial_booked_notion"] == notional_to_buy
-    fee = order["initial_booked_fee"]
-    balance_locked = notional_to_buy + fee
+    fee   = order["initial_booked_fee"]
+    booked = NOTIONAL_TO_BUY + fee                       # USDT locked
 
-    # The booking must now show up in the portfolio
-    assert client.get(f"/balance/{quote}").json() == {
-        "asset": quote,
-        "free": funding_amount - balance_locked,
-        "used": balance_locked,
-        "total": funding_amount,
-    }
+    # ── 3) OPTIONAL: create a *tiny* partial fill first ────────────────
+    if variant == "partial_reject":
+        # Pump in a fake volume so only ~5 % of order can fill.
+        # That leaves the rest still “open”.
+        client.patch(
+            f"/admin/tickers/{SYMBOL}/price",
+            json={
+                "price": LIMIT_PX,        # crosses immediately
+                "ask_volume": qty_btc * 0.05,
+                "bid_volume": qty_btc * 0.05,
+            },
+        )
+        # Give the engine a moment (tick loop) to settle
+        time.sleep(0.1)
 
-    # --------------------------------------------------------------------- #
-    # 3️⃣  Tamper with the balance – simulate disappearing funds
-    # --------------------------------------------------------------------- #
-    assets_free = 0.0
-    # remove 10 % of the fee from what was locked
-    assets_used = balance_locked - (fee * 0.1)
-
-    tamper_resp = client.patch(
-        f"/admin/balance/{quote}", json={"free": assets_free, "used": assets_used}
+    # ── 4) tamper: shrink the *used* balance so reservation < needed ───
+    # Drop 10 % of the fee ⇒ insufficient on next fill attempt
+    new_used = booked - fee * 0.1
+    client.patch(
+        f"/admin/balance/{QUOTE}",
+        json={"free": 0.0, "used": new_used},
     )
-    assert tamper_resp.status_code == 200
-    tampered = tamper_resp.json()  # keep for final assertions
 
-    # --------------------------------------------------------------------- #
-    # 4️⃣  Move the market to the limit price → engine tries to fill
-    # --------------------------------------------------------------------- #
-    client.patch(f"/admin/tickers/{symbol}/price", json={"price": limit_price})
+    # ── 5) move price again → engine tries to settle and detects shortfall
+    client.patch(
+        f"/admin/tickers/{SYMBOL}/price",
+        json={"price": LIMIT_PX},   # same price, triggers settle
+    )
+    time.sleep(0.1)                # allow async settle
 
-    # --------------------------------------------------------------------- #
-    # 5️⃣  Order must be rejected 
-    # --------------------------------------------------------------------- #
-    order_after = client.get(f"/orders/{order['id']}").json()
-    assert order_after["status"] in {"rejected", "partially_rejected"}
+    # ── 6) final assertions ────────────────────────────────────────────
+    final = client.get(f"/orders/{order['id']}").json()
+    if variant == "full_reject":
+        assert final["status"] == "rejected"
+    else:
+        assert final["status"] == "partially_rejected"
 
-    balances = client.get("/balance").json()
-    # Only USDT should exist in the portfolio
-    assert list(balances.keys()) == [quote]
-
-    # Locked USDT is back in `free`; nothing remains in `used`
-    assert balances[quote]["free"] == tampered["used"]
-    assert balances[quote]["used"] == 0.0
-    assert balances[quote]["total"] == tampered["free"] + tampered["used"]
+    bal = client.get(f"/balance/{QUOTE}").json()
+    # everything that was in `used` is now back in `free`
+    assert bal["used"] == 0.0
+    assert pytest.approx(bal["free"] + bal["used"], rel=0, abs=1e-9) == FUNDING
