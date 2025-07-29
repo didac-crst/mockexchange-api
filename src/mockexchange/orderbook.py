@@ -9,9 +9,12 @@ Redis-backed order book with secondary indexes:
 from __future__ import annotations
 
 import redis
-from typing import List
-from .constants import OPEN_STATUS, CLOSED_STATUS
+from typing import Iterable, Union, Optional, TypeAlias
+from .constants import OPEN_STATUS, OrderState, OrderSide, OPEN_STATUS_STR
 from ._types import Order
+
+StatusArg: TypeAlias = Union[str, OrderState]        # one element
+SideArg: TypeAlias = Union[str, OrderSide]        # one element
 
 class OrderBook:
     HASH_KEY      = "orders"
@@ -24,7 +27,14 @@ class OrderBook:
     # ------------ internal helpers ------------------------------------ #
     def _index_add(self, order: Order) -> None:
         """Add id to the open indexes (only if order is OPEN)."""
-        if order.status not in OPEN_STATUS:
+        is_open = (
+            order.status in OPEN_STATUS or
+            (isinstance(order.status, str) and order.status in OPEN_STATUS_STR)
+        )
+        if not is_open:
+            # If the order is not open, we don't need to index it.
+            # This is important for performance, as we don't want to index
+            # orders that are already closed (filled, canceled, etc.).
             # Only add to indexes if the order is open (new or partially filled)
             return
         self.r.sadd(self.OPEN_ALL_KEY, order.id)
@@ -54,23 +64,43 @@ class OrderBook:
     def list(
         self,
         *,
-        status: list[str] | str | None = None,
+        status: Optional[Union[StatusArg, Iterable[StatusArg]]] = None,
         symbol: str | None = None,
-        side: str | None = None,
+        side: Optional[SideArg] = None,
         tail: int | None = None,
         include_history: bool = False
-    ) -> List[Order]:
+    ) -> list[Order]:
         """
         List orders by status, symbol, side, and limit the tail size.
         Open orders are indexed by symbol, so they can be fetched quickly.
         """
         orders: list[Order]
-        if isinstance(status, str):
-            status = [status]
+        # ── normalise `status` to a *set of raw-string values* ───────────────
         if status is None:
-            status = OPEN_STATUS + CLOSED_STATUS
+            status = {s.value for s in OrderState}
+        elif isinstance(status, OrderState):
+            status = {status.value}
+        elif isinstance(status, str):
+            status = {status}
+        else:                     # iterable of str | OrderState
+            status = {
+                s.value if isinstance(s, OrderState) else s
+                for s in status
+            }
+        # ── normalise `side` to a *set of raw-string values* ────────────────
+        if side is None:
+            side_set = None                      # means “no filtering”
+        elif isinstance(side, OrderSide):
+            side_set = {side.value}
+        elif isinstance(side, str):
+            side_set = {side}
+        else:                                    # iterable of str | OrderSide
+            side_set = {
+                s.value if isinstance(s, OrderSide) else s
+                for s in side
+            }
         # Only if all statuses are OPEN_STATUS, we can use the indexes
-        if all(s in OPEN_STATUS for s in status):
+        if all(s in OPEN_STATUS_STR for s in status):
             # Use secondary indexes
             if symbol:
                 ids = self.r.smembers(self.OPEN_SYM_KEY.format(sym=symbol))
@@ -87,12 +117,20 @@ class OrderBook:
                 for _, blob in self.r.hscan_iter(self.HASH_KEY)
             ]
             if symbol: # Already fulfilled by if status in OPEN_STATUS if symbol is not None
-                orders = [o for o in orders if o.symbol == symbol]
+                orders = [o for o in orders if o.symbol == symbol] # Symbol is a plain text
         # Filter for both cases
-        if side: # Not fulfilled by if status in OPEN_STATUS
-            orders = [o for o in orders if o.side == side]
-        # Make sure we only return orders with the requested status
-        orders = [o for o in orders if o.status in status]
+        # 1) side-filter
+        if side_set is not None:
+            orders = [
+                o for o in orders
+                if (o.side.value if isinstance(o.side, OrderSide) else o.side) in side_set
+            ]
+
+        # 2) status-filter
+        orders = [
+            o for o in orders
+            if (o.status.value if isinstance(o.status, OrderState) else o.status) in status
+        ]
 
         # chronological order
         orders.sort(key=lambda o: o.ts_update, reverse=True)
@@ -107,7 +145,11 @@ class OrderBook:
         if not blob:                       # already gone
             return
         o = Order.from_json(blob)
-        if o.status in OPEN_STATUS:            # keep indexes consistent
+        is_open = (
+            o.status in OPEN_STATUS or
+            (isinstance(o.status, str) and o.status in OPEN_STATUS_STR)
+        )
+        if is_open:
             self._index_rem(o)
         pipe = self.r.pipeline()
         pipe.hdel(self.HASH_KEY, oid)

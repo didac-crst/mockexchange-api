@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 import time
 import json
 
-from .constants import OPEN_STATUS, CLOSED_STATUS, OrderSide, OrderType, OrderState
+from .constants import CLOSED_STATUS, OrderSide, OrderType, OrderState
 from .logging_config import logger
 
 # ─── Data classes ────────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ class Order:
     side          ``buy`` / ``sell``  
     type          ``market`` / ``limit``  
     amount        order size in base currency
-    status        ``new`` / ``filled`` / ``canceled`` / ``expired`` / ``rejected`` / ``partially_filled`` / ``partially_canceled``
+    status        ``new`` / ``filled`` / ``canceled`` / ``expired`` / ``rejected`` / ``partially_filled`` / ``partially_canceled`` / ``partially_expired`` / ``partially_rejected``
     price         actual execution price (set at fill time)
     limit_price   user-defined limit price (None for market orders)
     actual_filled        total amount filled so far
@@ -119,8 +119,8 @@ class Order:
 
     id: str
     symbol: str
-    side: str
-    type: str
+    side: OrderSide
+    type: OrderType
     amount: float
     notion_currency: str  # usually the quote currency, e.g. USDT
     fee_currency: str
@@ -129,7 +129,7 @@ class Order:
     actual_filled: float = 0.0  # until filled
     price: Optional[float] = None
     limit_price: Optional[float] = None  # None for market orders
-    status: str = "new"
+    status: OrderState = OrderState.NEW
     initial_booked_notion: float = 0.0
     reserved_notion_left: float = 0.0  # until filled
     actual_notion: float = 0.0  # until filled
@@ -163,6 +163,10 @@ class Order:
     def to_dict(self, *, include_history: bool = True) -> dict:
         """Return a plain dict representation. Optionally strip history to keep payloads small."""
         d = asdict(self)
+        # enums -> their raw value so json.dumps works
+        d["side"]   = self.side.value
+        d["type"]   = self.type.value
+        d["status"] = self.status.value
         if not include_history:
             d.pop("history", None)
         d.pop("_seed_history", None)
@@ -175,6 +179,13 @@ class Order:
     @classmethod
     def from_json(cls, blob: str, *, include_history: bool = False) -> "Order":
         data = json.loads(blob)
+        # normalise string literals back to Enum instances
+        if isinstance(data.get("side"), str):
+            data["side"] = OrderSide(data["side"])
+        if isinstance(data.get("type"), str):
+            data["type"] = OrderType(data["type"])
+        if isinstance(data.get("status"), str):
+            data["status"] = OrderState(data["status"])
         allowed = {f.name for f in dataclass_fields(cls)}
         if include_history:
             raw_hist = data.get("history", {}) or {}
@@ -232,7 +243,7 @@ class Order:
     # Residuals handling -----------------------------------
     @property
     def residual_base(self) -> float:
-        if self.status in CLOSED_STATUS or self.side == "buy":
+        if self.status in CLOSED_STATUS or self.side is OrderSide.BUY:
             # If the order is closed or a buy order, there are no residuals
             # This is because buy orders do not have a residual base
             return 0.0
@@ -248,7 +259,7 @@ class Order:
         if self.status in CLOSED_STATUS:
             # If the order is closed, there are no residuals
             return 0.0
-        if self.side == "buy":
+        if self.side is OrderSide.BUY:
             # For buy orders, the residual quote is the sum of reserved notion and fee
             # This is the total value that was reserved for the order but not yet filled
             # It includes both the notion value and the fee that was reserved
@@ -276,5 +287,5 @@ class Order:
         return None
     
     def public_payload(self) -> dict:
-        """Alias used by the API layer to strip history by default."""
-        return self.to_dict(include_history=False)
+        d = self.to_dict(include_history=False)
+        return d

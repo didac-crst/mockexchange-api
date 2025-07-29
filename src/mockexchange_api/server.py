@@ -81,17 +81,18 @@ from fastapi import FastAPI, HTTPException, Query, Depends, Header
 from pydantic import BaseModel, Field
 from mockexchange.engine_actors import start_engine  # NEW import
 from mockexchange.logging_config import logger
-from mockexchange.constants import ALL_STATUS, OPEN_STATUS, CLOSED_STATUS  # NEW import
+from mockexchange.constants import ALL_STATUS_STR, ALL_SIDES_STR, ALL_TYPES_STR
 
-_ALL_STATUS = Literal[*ALL_STATUS]  # type alias for all order statuses
-_TRADING_SIDES = Literal["buy", "sell"]
+_ALL_STATUS = Literal[*ALL_STATUS_STR]  # type alias for all order statuses
+_TRADING_SIDES = Literal[*ALL_SIDES_STR]  # type alias for all trading sides
+_ORDER_TYPES = Literal[*ALL_TYPES_STR]  # type alias for all order types
 
 
 # ─────────────────────────── Pydantic models ────────────────────────── #
 class OrderReq(BaseModel):
     symbol: str = "BTC/USDT"
     side: _TRADING_SIDES
-    type: Literal["market", "limit"] = "market"
+    type: _ORDER_TYPES = "market"
     amount: float
     limit_price: float | None = None
 

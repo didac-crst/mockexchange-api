@@ -20,7 +20,13 @@ import pandas as pd
 from .market import Market
 from .orderbook import OrderBook
 from .portfolio import Portfolio
-from .constants import OPEN_STATUS, CLOSED_STATUS
+from .constants import (
+    OrderSide,
+    OrderType,
+    OrderState,
+    OPEN_STATUS,           # {OrderState.NEW, …}
+    CLOSED_STATUS,         # {OrderState.FILLED, …}
+)
 from ._types import AssetBalance, Order
 from .logging_config import logger
 
@@ -175,14 +181,14 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         base, quote = o.symbol.split("/")
 
         # release leftovers
-        if o.side == "buy":
+        if o.side is OrderSide.BUY:
             self._release(quote, o.residual_quote)
         else:
             self._release(base,  o.residual_base)
             self._release(quote, o.residual_quote)
 
         # final order status
-        o.status = "rejected" if o.actual_filled == 0 else "partially_rejected"
+        o.status = (OrderState.REJECTED if o.actual_filled == 0 else OrderState.PARTIALLY_REJECTED)
         ts = int(time.time() * 1000)
         o.ts_update = o.ts_finish = ts
         o.comment = reason
@@ -198,7 +204,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         px = order.price if order.price is not None else order.limit_price
         fee_str = f"{order.actual_fee:.2f} {order.fee_currency}" if order.actual_fee is not None else "N/A"
         asset = order.symbol.split("/")[0]
-        if order.status in ("partially_filled","filled"):
+        if order.status in {OrderState.PARTIALLY_FILLED, OrderState.FILLED}:
             order_hist = order.last_history
             if order_hist is None:
                 logger.warning("No history for order %s", order.id)
@@ -214,16 +220,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             f"Order {order.id} [{order.type}] "
             f"{order.side.upper()} {amount:.8f} {asset} at {px_str}, fee {fee_str}"
         )
-        status_prefix = {"new": "Created",
-                         "partially_filled": "Partially Filled",
-                         "filled": "Executed",
-                         "canceled": "Canceled",
-                         "partially_canceled": "Partially Canceled",
-                         "expired": "Expired",
-                         "partially_expired": "Partially Expired",
-                         "rejected": "Rejected",
-                         "partially_rejected": "Partially Rejected",
-                         }[order.status if isinstance(order.status, str) else order.status.value]
+        status_prefix = order.status.label
         logger.info("%s %s", status_prefix, base_msg)
 
     # ---------- core balance moves ------------------------------------ #
@@ -292,15 +289,12 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         Compare what *should* be reserved (from open orders) with what's in portfolio.used.
         Returns a dict of mismatches.
         """
-        open_orders = (
-            self.order_book.list(status="new").get() +
-            self.order_book.list(status="partially_filled").get()
-        )
+        open_orders = self.order_book.list(status=OPEN_STATUS).get()
 
         expected = defaultdict(float)
         for o in open_orders:
             base, quote = o.symbol.split("/")
-            if o.side == "buy":
+            if o.side is OrderSide.BUY:
                 expected[quote] += max(o.residual_quote, 0.0)
             else:
                 expected[base]  += max(o.residual_base,  0.0)
@@ -347,26 +341,41 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         return {"length": len(all_bal), "assets": all_bal}
 
     def create_order(
-        self, *, symbol: str, side: str, type: str, amount: float, limit_price: float | None = None
+        self,
+        *,
+        symbol: str,
+        side: OrderSide | str,       # <-- may come in as str
+        type: OrderType | str,       # <-- may come in as str
+        amount: float,
+        limit_price: float | None = None,
     ):
+        # NORMALISE side / type  ────────────────────────────────
+        if isinstance(side, str):
+            try:
+                side = OrderSide(side)
+            except ValueError:
+                raise ValueError(f"invalid side {side!r}")
+
+        if isinstance(type, str):
+            try:
+                type = OrderType(type)
+            except ValueError:
+                raise ValueError(f"invalid order type {type!r}")
+
         # validation
         if symbol not in self.market.tickers.get():
             raise ValueError(f"Ticker {symbol} does not exist")
         if amount <= 0:
             raise ValueError("amount must be > 0")
-        if type not in {"market", "limit"}:
-            raise ValueError("type must be market | limit")
-        if type == "limit" and (limit_price is None or limit_price < 0):
+        if type is OrderType.LIMIT and (limit_price is None or limit_price < 0):
             raise ValueError("limit_price must be ≥ 0 for limit orders")
-        if side not in {"buy", "sell"}:
-            raise ValueError("side must be buy | sell")
 
         last = self.market.last_price(symbol).get()
         px = last
-        if type == "limit":
+        if type is OrderType.LIMIT:
             if limit_price is None:
                 raise ValueError("limit orders need limit_price")
-            if side == "buy":
+            if side is OrderSide.BUY:
                 px = limit_price
             else:  # sell – must reserve against worst-case (higher) price
                 px = max(limit_price, last)
@@ -377,7 +386,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         # funds check
         comment = None
         enough_funds = False
-        if side == "buy":
+        if side is OrderSide.BUY:
             have = self.portfolio.get(quote).get().free
             if have >= notion + fee:
                 enough_funds = True
@@ -403,14 +412,14 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                     f"Need {fee:.2f} {quote}, have {have:.2f}"
                 ) if comment is None else comment + f", need {fee:.2f} {quote}, have {have:.2f}"
         if enough_funds:
-            if side == "buy":
+            if side is OrderSide.BUY:
                 self._reserve(quote, notion + fee)
             else:
                 self._reserve(base, amount)
                 self._reserve(quote, fee)
         # set booked values per side
-        booked_notion = notion if side == "buy" else 0.0
-        status = "new" if enough_funds else "rejected"
+        booked_notion = notion if side is OrderSide.BUY else 0.0
+        status = OrderState.NEW if enough_funds else OrderState.REJECTED
         initial_booked_notion = booked_notion if enough_funds else 0.0
         reserved_notion_left = booked_notion if enough_funds else 0.0
         initial_booked_fee = fee if enough_funds else 0.0
@@ -420,18 +429,18 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         order = Order(
             id=self._uid(),
             symbol=symbol,
-            side=side,
-            type=type,
+            side=side,           # now an OrderSide
+            type=type,           # now an OrderType
             amount=amount,
-            limit_price=None if type == "market" else limit_price,
+            limit_price=None if type is OrderType.MARKET else limit_price,
             notion_currency=quote,
             fee_currency=quote,
             fee_rate=self.commission,
+            status=status,
             initial_booked_notion=initial_booked_notion,
             reserved_notion_left=reserved_notion_left,
             initial_booked_fee= initial_booked_fee,
             reserved_fee_left= reserved_fee_left,
-            status=status,
             ts_create=ts,
             ts_update=ts,
             ts_finish=ts if status in CLOSED_STATUS else None,
@@ -441,7 +450,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         self._log_order(order)
 
         # market order ⇒ schedule async settle
-        if type == "market":
+        if type is OrderType.MARKET:
             delay = random.uniform(MIN_TIME, MAX_TIME)
             t = threading.Timer(
                 delay, lambda: self.actor_ref.tell({"cmd": "_settle_market", "oid": order.id})
@@ -449,7 +458,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             t.start()
             self._timers.append(t)
 
-        return order.__dict__
+        return order.public_payload()
 
     # expose await-able helper
     def create_order_async(self, **kw):
@@ -460,7 +469,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         if o.status not in OPEN_STATUS:
             raise ValueError("Only *open* orders can be canceled")
         base, quote = o.symbol.split("/")
-        if o.side == "buy":
+        if o.side is OrderSide.BUY:
             rq = o.residual_quote
             released_quote = self._release(quote, rq)
             released_base  = 0.0
@@ -469,7 +478,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             rq = o.residual_quote
             released_base  = self._release(base, rb)
             released_quote = self._release(quote, rq)
-        o.status = "canceled" if o.actual_filled == 0 else "partially_canceled"
+        o.status = OrderState.CANCELED if o.actual_filled == 0 else OrderState.PARTIALLY_CANCELED
         ts = int(time.time() * 1000)
         o.ts_finish = o.ts_update = ts
         o.comment = "Order canceled by user"
@@ -482,7 +491,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         self.order_book.update(o)
         self._log_order(o)
         # Sanity checks (idempotency + no leaks)
-        if o.side == "buy":
+        if o.side is OrderSide.BUY:
             assert o.reserved_notion_left >= -1e-9
             assert o.reserved_fee_left    >= -1e-9
         else:
@@ -490,7 +499,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             assert o.reserved_fee_left    >= -1e-9
 
         return {
-            "canceled_order": o.__dict__,
+            "canceled_order": o.public_payload(),
             "freed": {base: released_base, quote: released_quote},
         }
 
@@ -522,7 +531,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         fillable = False
         need_amount = o.amount - o.actual_filled
         # Simulate slippage
-        total_amount_available = ask_volume if o.side == "buy" else bid_volume
+        total_amount_available = ask_volume if o.side is OrderSide.BUY else bid_volume
         amount_available = self._slippage_simulate(total_amount_available, SIGMA_FILL)
         if amount_available < need_amount:
             fillable_amount = amount_available
@@ -532,24 +541,24 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             order_will_close = True
         if fillable_amount <= 0:
             return
-        if o.type == "market":
+        if o.type is OrderType.MARKET:
             fillable = True
-        elif o.type == "limit":
+        elif o.type is OrderType.LIMIT:
             if o.limit_price is None:
                 raise ValueError("Limit orders must have a limit_price")
             fillable = (
-                (o.side == "buy" and ask <= o.limit_price)
-                or (o.side == "sell" and bid >= o.limit_price)
+                (o.side is OrderSide.BUY and ask <= o.limit_price)
+                or (o.side is OrderSide.SELL and bid >= o.limit_price)
             )
         if not fillable:
             return
         base, quote = o.symbol.split("/")
-        px = ask if o.side == "buy" else bid
+        px = ask if o.side is OrderSide.BUY else bid
 
         # ---------------- reservation check ---------------------------
         # If the order is not fillable due to insufficient reserves,
         # we reject it and release the reserved amounts.
-        if o.side == "buy":
+        if o.side is OrderSide.BUY:
             need_quote = fillable_amount * px * (1 + self.commission)
             total_balance_q = self.portfolio.get(quote).get().total
             if total_balance_q + 1e-12 < need_quote:
@@ -582,7 +591,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                 return
         tx = (
             self._execute_buy
-            if o.side == "buy"
+            if o.side is OrderSide.BUY
             else self._execute_sell
         )(
             base=base,
@@ -605,7 +614,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         o.price         = o.actual_notion / o.actual_filled if o.actual_filled > 0 else px
 
         # shrink reservations
-        if o.side == "buy":
+        if o.side is OrderSide.BUY:
             o.reserved_notion_left = max(o.reserved_notion_left - tx["filled_notion"], 0.0)
             o.reserved_fee_left    = max(o.reserved_fee_left    - tx["filled_fee"],    0.0)
         else:
@@ -613,22 +622,11 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             o.reserved_fee_left    = max(o.reserved_fee_left    - tx["filled_fee"],    0.0)
 
         if order_will_close:
-            # base, quote = o.symbol.split("/")
-            # # Any leftovers of reservations -> release here
-            # if o.side == "buy":
-            #     rq = o.residual_quote
-            #     if rq > 1e-9:
-            #         self._release(quote, rq)
-            # else:
-            #     rb = o.residual_base
-            #     rq = o.residual_quote
-            #     if rb > 1e-9: self._release(base, rb)
-            #     if rq > 1e-9: self._release(quote, rq)
-            new_status = "filled"
+            new_status = OrderState.FILLED
             o.ts_finish = ts
             o.squash_booking()
         else:
-            new_status = "partially_filled"
+            new_status = OrderState.PARTIALLY_FILLED
         o.status = new_status
         o.add_history(
             ts=ts,
@@ -697,15 +695,15 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         for s in OPEN_STATUS:
             for o in self.order_book.list(status=s).get():
                 if o.status in OPEN_STATUS:
-                    if o.status == "new":
-                        expired_status = "expired"
+                    if o.status is OrderState.NEW:
+                        expired_status = OrderState.EXPIRED
                     else:
-                        expired_status = "partially_expired"
+                        expired_status = OrderState.PARTIALLY_EXPIRED
                     base, quote = o.symbol.split("/")
                     ts = o.ts_update
                     if ts < cutoff:
                         # release leftovers
-                        if o.side == "buy":
+                        if o.side is OrderSide.BUY:
                             self._release(quote, o.residual_quote)
                         else:
                             self._release(base,  o.residual_base)
@@ -730,12 +728,12 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         return expired
 
     # ----- dry-run helper --------------------------------------------------- #
-    def can_execute(self, *, symbol: str, side: str,
+    def can_execute(self, *, symbol: str, side: OrderSide,
                     amount: float, price: float | None = None):
         px = price or self.market.last_price(symbol).get()
         base, quote = symbol.split("/")
         fee = amount * px * self.commission
-        if side == "buy":
+        if side is OrderSide.BUY:
             have = self.portfolio.get(quote).get().free
             need = amount * px + fee
             ok = have >= need
@@ -838,7 +836,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         open_orders_pd["price"] = open_orders_pd["symbol"].map(prices)
         # We need to calculate the reserved assets, but this only makes sense for SELL orders.
         open_orders_pd["assets_frozen_value"] = 0.0
-        open_orders_pd.loc[open_orders_pd["side"] == "sell", "assets_frozen_value"] = (
+        open_orders_pd.loc[open_orders_pd["side"] == OrderSide.SELL, "assets_frozen_value"] = (
             open_orders_pd["amount"] - open_orders_pd["actual_filled"]
         ) * open_orders_pd["price"]
         open_orders_pd["cash_frozen_value"] = (
