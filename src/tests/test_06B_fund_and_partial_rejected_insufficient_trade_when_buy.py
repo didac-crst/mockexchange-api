@@ -85,7 +85,19 @@ def test_insufficient_funds_rejection(client):
     booked = NOTIONAL_TO_BUY + fee                       # USDT locked
 
     # --------------------------------------------------------------------- #
-    # 3️⃣A  Create a *tiny* partial fill first
+    # 3️⃣A  Tamper with the balance – simulate disappearing funds
+    # --------------------------------------------------------------------- #
+    # Drop 10 % of the fee ⇒ insufficient on next fill attempt
+    new_used = booked - fee * 0.1
+    tamper_resp = client.patch(
+        f"/admin/balance/{QUOTE}",
+        json={"free": 0.0, "used": new_used},
+    )
+    assert tamper_resp.status_code == 200
+    tampered = tamper_resp.json()  # keep for final assertions
+
+    # --------------------------------------------------------------------- #
+    # 3️⃣B  Create a *tiny* partial fill first
     # --------------------------------------------------------------------- #
     # Pump in a fake volume so only ~5 % of order can fill.
     # That leaves the rest still “open”.
@@ -99,18 +111,6 @@ def test_insufficient_funds_rejection(client):
     )
     # Give the engine a moment (tick loop) to settle
     time.sleep(0.1)
-
-    # --------------------------------------------------------------------- #
-    # 3️⃣B  Tamper with the balance – simulate disappearing funds
-    # --------------------------------------------------------------------- #
-    # Drop 10 % of the fee ⇒ insufficient on next fill attempt
-    new_used = booked - fee * 0.1
-    tamper_resp = client.patch(
-        f"/admin/balance/{QUOTE}",
-        json={"free": 0.0, "used": new_used},
-    )
-    assert tamper_resp.status_code == 200
-    tampered = tamper_resp.json()  # keep for final assertions
 
     # --------------------------------------------------------------------- #
     # 4️⃣  Move the market to the limit price → engine tries to fill
