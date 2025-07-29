@@ -16,5 +16,6 @@ OrderState = type("OrderState", (), {"NEW": "new",
                                      "CANCELED": "canceled",
                                      "PARTIALLY_EXPIRED": "partially_expired",
                                      "EXPIRED": "expired",
+                                     "PARTIALLY_REJECTED": "partially_rejected",
                                      "REJECTED": "rejected",
                                      })

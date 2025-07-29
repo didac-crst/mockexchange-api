@@ -160,14 +160,14 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         return amount * random_number
 
     # ---- reservation guard ------------------------------------------- #
-    def _cancel_for_insufficient_reserve(self, o: Order, reason: str) -> None:
+    def _rejected_for_insufficient_reserve(self, o: Order, reason: str) -> None:
         """
-        Cancel (or partially cancel) *o* because the amounts still reserved
+        Reject *o* because the amounts still reserved
         in the portfolio are not enough to execute the next fill.
 
         The function
         • releases whatever is still reserved,
-        • sets the status to canceled / partially_canceled,
+        • sets the status to rejected / partially_rejected,
         • appends a history entry,
         • squashes the residual booking,
         • updates the order book and emits a log entry.
@@ -182,7 +182,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             self._release(quote, o.residual_quote)
 
         # final order status
-        o.status = "canceled" if o.actual_filled == 0 else "partially_canceled"
+        o.status = "rejected" if o.actual_filled == 0 else "partially_rejected"
         ts = int(time.time() * 1000)
         o.ts_update = o.ts_finish = ts
         o.comment = reason
@@ -222,6 +222,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                          "expired": "Expired",
                          "partially_expired": "Partially Expired",
                          "rejected": "Rejected",
+                         "partially_rejected": "Partially Rejected",
                          }[order.status if isinstance(order.status, str) else order.status.value]
         logger.info("%s %s", status_prefix, base_msg)
 
@@ -547,12 +548,12 @@ class ExchangeEngineActor(pykka.ThreadingActor):
 
         # ---------------- reservation check ---------------------------
         # If the order is not fillable due to insufficient reserves,
-        # we cancel it and release the reserved amounts.
+        # we reject it and release the reserved amounts.
         if o.side == "buy":
             need_quote = fillable_amount * px * (1 + self.commission)
             total_balance_q = self.portfolio.get(quote).get().total
             if total_balance_q + 1e-12 < need_quote:
-                self._cancel_for_insufficient_reserve(
+                self._rejected_for_insufficient_reserve(
                     o,
                     reason=f"Insufficient {quote} reserved to buy (need {need_quote:.8f} {quote}, have {total_balance_q:.8f} {quote})"
                 )
@@ -563,7 +564,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             total_balance_a = self.portfolio.get(base).get().total
             total_balance_q = self.portfolio.get(quote).get().total
             if total_balance_a + 1e-12 < need_asset:
-                self._cancel_for_insufficient_reserve(
+                self._rejected_for_insufficient_reserve(
                     o,
                     reason=(
                         f"Insufficient {base} reserved for sell (need {need_asset:.8f} {base}, have {total_balance_a:.8f} {base})"
@@ -571,7 +572,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                 )
                 return
             elif total_balance_q + 1e-12 < need_fee_q:
-                self._cancel_for_insufficient_reserve(
+                self._rejected_for_insufficient_reserve(
                     o,
                     reason=(
                         f"Insufficient {quote} reserved for sell to pay fee "
