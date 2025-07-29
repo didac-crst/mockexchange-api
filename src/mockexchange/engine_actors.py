@@ -695,6 +695,10 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         for s in OPEN_STATUS:
             for o in self.order_book.list(status=s).get():
                 if o.status in OPEN_STATUS:
+                    if o.status == "new":
+                        expired_status = "expired"
+                    else:
+                        expired_status = "partially_expired"
                     base, quote = o.symbol.split("/")
                     ts = o.ts_update
                     if ts < cutoff:
@@ -704,14 +708,14 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                         else:
                             self._release(base,  o.residual_base)
                             self._release(quote, o.residual_quote)
-                        o.status = "expired"
+                        o.status = expired_status
                         o.ts_update = o.ts_finish = now_ms
                         o.reserved_notion_left = 0.0
                         o.reserved_fee_left = 0.0
                         o.comment = comment
                         o.add_history(
                             ts=now_ms,
-                            status="expired",
+                            status=expired_status,
                             comment=comment,
                         )
                         self.order_book.update(o)
