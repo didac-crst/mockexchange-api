@@ -1,5 +1,5 @@
 """
-tests/test_06C_fund_and_cancel_insufficient_fee_when_sell.py
+tests/test_06C_fund_and_rejected_insufficient_fee_when_sell.py
 ============================================================
 
 Variant of *test 06A* that targets **SELL‑side fee shortages**.
@@ -12,7 +12,7 @@ Motivation
 * If, *before* the match happens, the reserved **fee** balance is reduced
   (bug, manual intervention, concurrent withdrawal …) the order **must
   not** execute.
-  The engine has to *cancel* (or *partially cancel*) the order and roll
+  The engine has to *reject* (or *partially reject*) the order and roll
   back **all** reservations.
 
 Test flow
@@ -21,7 +21,7 @@ Test flow
 2. **Submit** a SELL‑limit order – engine locks BTC + fee.
 3. **Tamper**: steal part of the *fee* (USDT) from the ``used`` bucket.
 4. **Tick** the market to the limit price (would normally trigger a fill).
-5. **Assert** the order ends up *canceled / partially_canceled* and that
+5. **Assert** the order ends up *rejected / partially_rejected* and that
    every reservation is released (``used`` columns are zero).
 
 A failure indicates the pre‑execution funds‑check for sell‑side fees is
@@ -49,7 +49,7 @@ COMMISSION = 0.001  # matches default in env (0.1 %)
 # --------------------------------------------------------------------------- #
 # Test case
 # --------------------------------------------------------------------------- #
-def test_sell_order_cancels_when_fee_is_missing(client):
+def test_sell_order_rejects_when_fee_is_missing(client):
     """
     Full *happy‑path* description of what happens in this test:
 
@@ -72,11 +72,11 @@ def test_sell_order_cancels_when_fee_is_missing(client):
 
     5. **Trigger**
        The ticker is moved up to the limit price which would normally cause the
-       order to match.  The engine is expected to spot the shortfall and cancel
-       (or partially cancel) the order.
+       order to match.  The engine is expected to spot the shortfall and reject
+       (or partially reject) the order.
 
     6. **Assertions**
-       The order status must be *canceled / partially_canceled* **and** every
+       The order status must be *rejected / partially_rejected* **and** every
        reservation has to be rolled back – i.e. both `used` columns are `0`.
     """
 
@@ -150,7 +150,7 @@ def test_sell_order_cancels_when_fee_is_missing(client):
 
     # --- Step 5: verify the engine reacted correctly ---
     o_final = client.get(f"/orders/{o['id']}").json()
-    assert o_final["status"] in {"canceled", "partially_canceled"}
+    assert o_final["status"] in {"rejected", "partially_rejected"}
 
     # No asset or fee should remain locked – everything must be released.
     bals_final = client.get("/balance").json()

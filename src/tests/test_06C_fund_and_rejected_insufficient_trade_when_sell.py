@@ -1,5 +1,5 @@
 """
-tests/test_06B_fund_and_cancel_insufficient_trade_when_sell.py
+tests/test_06B_fund_and_rejected_insufficient_trade_when_sell.py
 ==============================================================
 
 Twin-scenario of *test 06A* – this time for the **SELL** side.
@@ -13,7 +13,7 @@ Rationale
 
 * If – before the order is matched – somebody tinkers with the balances and
   lowers either reservation, the trade **must not** go through.
-  The engine has to **cancel** (or partially cancel) the order and roll back
+  The engine has to **reject** (or partially reject) the order and roll back
   whatever it had reserved.
 
 Test outline
@@ -22,7 +22,7 @@ Test outline
 2. **Create** a SELL-limit order – the engine reserves BTC + fee.
 3. **Tamper** with the BTC balance so that *used &lt; reserved*.
 4. **Tick** the market price to the limit price (simulating a match).
-5. **Assert** the order is *canceled / partially_canceled* and every
+5. **Assert** the order is *rejected / partially_rejected* and every
    reservation is released.
 
 A failure means the “pre–execution funds check” is broken for sell orders.
@@ -49,7 +49,7 @@ COMMISSION = 0.001  # matches default in env (0.1 %)
 # --------------------------------------------------------------------------- #
 # Test case
 # --------------------------------------------------------------------------- #
-def test_sell_order_cancels_when_base_is_missing(client):
+def test_sell_order_rejects_when_base_is_missing(client):
     """
     Full *happy‑path* description of what happens in this test:
 
@@ -73,11 +73,11 @@ def test_sell_order_cancels_when_base_is_missing(client):
 
     5. **Trigger**
        The ticker is moved up to the limit price which would normally cause the
-       order to match.  The engine is expected to spot the shortfall and cancel
-       (or partially cancel) the order.
+       order to match.  The engine is expected to spot the shortfall and reject
+       (or partially reject) the order.
 
     6. **Assertions**
-       The order status must be *canceled / partially_canceled* **and** every
+       The order status must be *rejected / partially_rejected* **and** every
        reservation has to be rolled back – i.e. both `used` columns are `0`.
     """
 
@@ -151,7 +151,7 @@ def test_sell_order_cancels_when_base_is_missing(client):
 
     # --- Step 5: verify the engine reacted correctly ---
     o_final = client.get(f"/orders/{o['id']}").json()
-    assert o_final["status"] in {"canceled", "partially_canceled"}
+    assert o_final["status"] in {"rejected", "partially_rejected"}
 
     # No asset or fee should remain locked – everything must be released.
     bals_final = client.get("/balance").json()
