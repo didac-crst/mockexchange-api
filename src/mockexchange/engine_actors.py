@@ -220,6 +220,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
                          "canceled": "Canceled",
                          "partially_canceled": "Partially Canceled",
                          "expired": "Expired",
+                         "partially_expired": "Partially Expired",
                          "rejected": "Rejected",
                          }[order.status if isinstance(order.status, str) else order.status.value]
         logger.info("%s %s", status_prefix, base_msg)
