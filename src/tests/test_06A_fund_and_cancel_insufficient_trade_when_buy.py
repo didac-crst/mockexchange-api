@@ -1,5 +1,5 @@
 """
-tests/test_06A_fund_and_cancel_insufficient_trade_when_buy.py
+tests/test_06A_fund_and_reject_insufficient_trade_when_buy.py
 ======================================
 
 End-to-end check for **reservation roll-back** when the account balance is
@@ -13,7 +13,7 @@ Why this test exists
 * If, in the meantime, something external reduces that balance
   (e.g. a bug, a manual intervention, or concurrent withdrawal),
   the engine **must** detect the shortfall *right before execution* and
-  cancel the order, releasing whatever was still reserved.
+  reject the order, releasing whatever was still reserved.
 
 The test follows these steps:
 
@@ -21,7 +21,7 @@ The test follows these steps:
 2. **Create** a BUY-limit order on *BTC/USDT* – this books funds.
 3. **Tamper** with the USDT balance so that *used &lt; originally reserved*.
 4. **Move** the market price to the limit price – the engine tries to settle.
-5. **Assert** that the order ends up *canceled / partially_canceled* and all
+5. **Assert** that the order ends up *rejected / partially_rejected* and all
    previously-locked USDT is back in `free` while `used` is zero.
 """
 
@@ -113,10 +113,10 @@ def test_funding(client):
     client.patch(f"/admin/tickers/{symbol}/price", json={"price": limit_price})
 
     # --------------------------------------------------------------------- #
-    # 5️⃣  Order must be canceled and funds released
+    # 5️⃣  Order must be rejected 
     # --------------------------------------------------------------------- #
     order_after = client.get(f"/orders/{order['id']}").json()
-    assert order_after["status"] in {"canceled", "partially_canceled"}
+    assert order_after["status"] in {"rejected", "partially_rejected"}
 
     balances = client.get("/balance").json()
     # Only USDT should exist in the portfolio
