@@ -1,6 +1,6 @@
-# mockexchange-api Dry Run Example
+# Mockexchange API - Dry Run Example 🚀
 
-This directory contains a Dockerized dry run example for the **mockexchange-api** library, designed to run continuously for hours or days. It simulates trading activity by generating random orders (no strategy), so the simulated portfolio value will erode over time 📉. It logs operations and validates behavior without using live endpoints.
+This directory contains a Dockerized dry run example for the **mockexchange-api** library, designed to run continuously for hours or days. It simulates trading activity by **generating random orders (no strategy)**, so the simulated portfolio value should erode over time 📉. It logs operations and validates behavior without using live endpoints.
 
 ## Contents
 
@@ -37,11 +37,11 @@ cd mockexchange-api/examples/dry_run
 ```sh
 cp on_docker/.env.example on_docker/.env
 ```
-Then edit `on_docker/.env` to set your API endpoint and credentials.
+Then edit `on_docker/.env` to set your **API endpoint** and **credentials**.
 
 ## Dockerized Usage
 
-1. ⚠️ Ensure the mockexchange-api backend is already running before starting the dry run.
+1. Ensure the mockexchange-api backend is already running before starting the dry run... 😅
 2. Ensure your Docker daemon is running.
 3. **Start the dry run**:
 ```sh
