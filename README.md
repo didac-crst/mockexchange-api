@@ -293,7 +293,14 @@ Useful flags:
 
 > **Note :** tests assume `URL_API=http://localhost:8000` — override if you point to a remote instance.  
 
----  
+---
+
+## Dry Run Example 🚀  
+
+After validating with tests, run a continuous Dockerized dry run to simulate random orders (no strategy), which will cause portfolio value erosion over time 📉.  
+See the detailed [dry run README](examples/dry_run/README.md) for setup, tunable parameters, and usage.
+
+---
 
 ## Repo layout (updated 2025-07)  
 
