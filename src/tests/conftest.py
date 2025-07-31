@@ -7,7 +7,7 @@ from .helpers import reset_and_fund
 
 load_dotenv()  # load .env → os.environ
 
-BASE_URL = os.getenv("URL_API", "http://localhost:8000")
+BASE_URL = os.getenv("API_URL", "http://localhost:8000")
 os.environ.setdefault("TEST_ENV", "true")  # disable API-key auth
 
 

@@ -61,7 +61,7 @@ docker compose down
 
 | Parameter                      | Default                                                   | Description                                                                                 |
 |--------------------------------|-----------------------------------------------------------|---------------------------------------------------------------------------------------------|
-| **URL_API**                    | `https://mockexchange-api.your-domain.com/`               | Base URL of the MockExchange API endpoint.                                                 |
+| **API_URL**                    | `https://mockexchange-api.your-domain.com/`               | Base URL of the MockExchange API endpoint.                                                 |
 | **TEST_ENV**                   | `true`                                                    | If `true`, enables test mode (no use of API_KEY authentication).                                             |
 | **API_KEY**                    | `"your-super-secret-key"`                               | API authentication key.                                                                     |
 | **FUNDING_AMOUNT**             | `5000`                                                    | Initial balance in the quote asset for generating orders.                                   |
