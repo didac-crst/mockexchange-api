@@ -69,7 +69,6 @@ docker compose down
 | **BASE_ASSETS_TO_BUY**         | `BTC,ETH,SOL,XRP,BNB,ADA,DOGE,DOT`                        | Comma-separated list of core assets to trade.                                              |
 | **NUM_EXTRA_ASSETS**           | `4`                                                       | Number of additional (random) assets to include beyond the base list.             |
 | **TRADING_TYPES**              | `market,limit`                                           | Order types to randomly choose from.                                                       |
-| **SIDES**                      | `buy,buy,sell`                                            | Distribution of trade sides (2 × “buy”, 1 × “sell”).                                        |
 | **MIN_ORDERS_PER_BATCH**       | `1`                                                       | Minimum number of orders generated in each batch.                                          |
 | **MAX_ORDERS_PER_BATCH**       | `3`                                                       | Maximum number of orders generated in each batch.                                          |
 | **MIN_SLEEP**                  | `30`                                                      | Minimum seconds to wait between batches.                                                   |
@@ -79,11 +78,13 @@ docker compose down
 | **MIN_ORDER_QUOTE**            | `1.0`                                                     | Don’t place orders below this quote-currency amount.                                       |
 | **MIN_BALANCE_CASH_QUOTE**     | `250.0`                                                   | Keep at least this much quote balance free to cover fees.                                  |
 | **MIN_BALANCE_ASSETS_QUOTE**   | `2.0`                                                     | Maintain this quote value worth of assets as a buffer to avoid insufficient-balance issues.|
+| **RESET_PORTFOLIO**   | `false`                                                     | If `true`, clears all existing assets and starts with a fresh portfolio. If `false`, preserves the current state. |
 
 ## Directory Structure
 
 ```text
 examples/dry_run/
+├── README.md
 ├── start_dryrun.sh
 ├── log_dryrun.sh
 └── on_docker/
