@@ -172,7 +172,12 @@ def main() -> None:
                 limit_price_str = (
                     f"{px:>16,.4f}" if limit_price is not None else " " * 16
                 )
+                timestamp = order["ts_create"] / 1000  # Convert from ms to seconds
+                datetime_str = time.strftime(
+                    "%d/%m %H:%M:%S", time.localtime(timestamp)
+                )
                 print(
+                    f"{datetime_str} | "
                     f"Status: {order['status']:<10} | "
                     f"{order['symbol']:<15} | "
                     f"{order['side']:<4} - {order['type']:<6} >> {order['amount']:>16,.4f} "
