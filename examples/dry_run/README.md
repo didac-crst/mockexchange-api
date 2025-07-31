@@ -79,11 +79,13 @@ docker compose down
 | **MIN_ORDER_QUOTE**            | `1.0`                                                     | Don’t place orders below this quote-currency amount.                                       |
 | **MIN_BALANCE_CASH_QUOTE**     | `250.0`                                                   | Keep at least this much quote balance free to cover fees.                                  |
 | **MIN_BALANCE_ASSETS_QUOTE**   | `2.0`                                                     | Maintain this quote value worth of assets as a buffer to avoid insufficient-balance issues.|
+| **RESET_PORTFOLIO**   | `false`                                                     | If `true`, clears all existing assets and starts with a fresh portfolio. If `false`, preserves the current state. |
 
 ## Directory Structure
 
 ```text
 examples/dry_run/
+├── README.md
 ├── start_dryrun.sh
 ├── log_dryrun.sh
 └── on_docker/
