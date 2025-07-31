@@ -1,4 +1,3 @@
-````
 # mockexchange-api Dry Run Example
 
 This directory contains a Dockerized dry run example for the **mockexchange-api** library, designed to run continuously for hours or days. It simulates trading activity by generating random orders (no strategy), so the simulated portfolio value will erode over time 📉. It logs operations and validates behavior without using live endpoints.
@@ -6,18 +5,18 @@ This directory contains a Dockerized dry run example for the **mockexchange-api*
 ## Contents
 
 - `start_dryrun.sh`  
-    Builds and starts the Dockerized dry run environment.
+Builds and starts the Dockerized dry run environment.
 - `log_dryrun.sh`    
-    Follows the Docker container logs for the order generator.
+Follows the Docker container logs for the order generator.
 - `on_docker/`       
-    - **Dockerfile**: Slim Python 3.12 image, installs dependencies, sets working directory.
-    - **docker-compose.yml**: Defines `dryrun-order-gen` service with host networking and resource limits.
-    - **requirements.txt**: Python runtime dependencies (`httpx`, `python-dotenv`).
-    - **.env.example**: Template for environment variables.
-    - **scripts**/
-        - `dryrun_continuous_order_generator.py`: Places randomized orders based on env vars.
-        - `helpers.py`: HTTPX client utilities (reset, fund, patch ticker, fetch prices).
-        - `conftest.py`: Pytest fixtures to reset and fund backend before tests.
+- **Dockerfile**: Slim Python 3.12 image, installs dependencies, sets working directory.
+- **docker-compose.yml**: Defines `dryrun-order-gen` service with host networking and resource limits.
+- **requirements.txt**: Python runtime dependencies (`httpx`, `python-dotenv`).
+- **.env.example**: Template for environment variables.
+- **scripts**/
+    - `dryrun_continuous_order_generator.py`: Places randomized orders based on env vars.
+    - `helpers.py`: HTTPX client utilities (reset, fund, patch ticker, fetch prices).
+    - `conftest.py`: Pytest fixtures to reset and fund backend before tests.
 
 ## Prerequisites
 
@@ -27,36 +26,36 @@ This directory contains a Dockerized dry run example for the **mockexchange-api*
 ## Installation
 
 1. **Clone the repository**:
-   ```sh
-   git clone https://github.com/yourorg/mockexchange-api.git
-   ```
+```sh
+git clone https://github.com/yourorg/mockexchange-api.git
+```
 2. **Navigate to the dry run example**:
-   ```sh
-   cd mockexchange-api/examples/dry_run
-   ```
+```sh
+cd mockexchange-api/examples/dry_run
+```
 3. **Prepare environment file**:
-   ```sh
-   cp on_docker/.env.example on_docker/.env
-   ```
-   Then edit `on_docker/.env` to set your API endpoint and credentials.
+```sh
+cp on_docker/.env.example on_docker/.env
+```
+Then edit `on_docker/.env` to set your API endpoint and credentials.
 
 ## Dockerized Usage
 
 1. ⚠️ Ensure the mockexchange-api backend is already running before starting the dry run.
 2. Ensure your Docker daemon is running.
 3. **Start the dry run**:
-   ```sh
-   ./start_dryrun.sh
-   ```
+```sh
+./start_dryrun.sh
+```
 4. **Follow container logs**:
-   ```sh
-   ./log_dryrun.sh
-   ```
+```sh
+./log_dryrun.sh
+```
 5. To stop and clean up:
-   ```sh
-   cd on_docker
-   docker compose down
-   ```
+```sh
+cd on_docker
+docker compose down
+```
 
 ## Tunable Parameters (in `.env`)
 
@@ -85,15 +84,15 @@ This directory contains a Dockerized dry run example for the **mockexchange-api*
 
 ```text
 examples/dry_run/
-    ├── start_dryrun.sh
-    ├── log_dryrun.sh
-    └── on_docker/
-        ├── Dockerfile
-        ├── docker-compose.yml
-        ├── requirements.txt
-        ├── .env.example
-        └── scripts/
-            ├── dryrun_continuous_order_generator.py
-            ├── helpers.py
-            └── conftest.py
+├── start_dryrun.sh
+├── log_dryrun.sh
+└── on_docker/
+    ├── Dockerfile
+    ├── docker-compose.yml
+    ├── requirements.txt
+    ├── .env.example
+    └── scripts/
+        ├── dryrun_continuous_order_generator.py
+        ├── helpers.py
+        └── conftest.py
 ```
