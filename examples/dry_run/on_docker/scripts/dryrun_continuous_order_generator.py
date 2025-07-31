@@ -125,11 +125,11 @@ def main() -> None:
                         ticket_amount_q = cash_free - MIN_BALANCE_CASH_QUOTE
                 else:
                     balance_free_asset = last_balances[asset]["free"]
-                    if balance_free_asset < MIN_BALANCE_ASSETS_QUOTE:
+                    balance_free_asset_q = balance_free_asset * px
+                    if balance_free_asset_q < MIN_BALANCE_ASSETS_QUOTE:
                         # Skip if no free asset available
                         print(f"Skipping {symbol} sell order: no free asset available.")
                         continue
-                    balance_free_asset_q = balance_free_asset * px
                     total_equity = get_overview_balances(client)["total_equity"]
                     fast_ticket_amount_q = total_equity * FAST_SELL_TICKET_AMOUNT_RATIO
                     if balance_free_asset_q >= fast_ticket_amount_q:
