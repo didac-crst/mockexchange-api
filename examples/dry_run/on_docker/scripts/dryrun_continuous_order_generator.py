@@ -36,7 +36,6 @@ BASE_ASSETS_TO_BUY = os.getenv(
 
 NUM_EXTRA_ASSETS = int(os.getenv("NUM_EXTRA_ASSETS", 8))
 TRADING_TYPES = os.getenv("TRADING_TYPES", "market,limit").split(",")
-SIDES = os.getenv("SIDES", "buy,sell").split(",")
 
 MIN_ORDERS_PER_BATCH = int(os.getenv("MIN_ORDERS_PER_BATCH", 1))
 MAX_ORDERS_PER_BATCH = int(os.getenv("MAX_ORDERS_PER_BATCH", 3))
@@ -60,6 +59,22 @@ HEADERS = {"x-api-key": API_KEY} if TEST_ENV else None
 # ────────────────────────────────────────────────────
 # Utility functions
 # ────────────────────────────────────────────────────
+_BUY = "buy"
+_SELL = "sell"
+
+
+def define_sides_probability(cash_ratio: float) -> list[str]:
+    """Establish the sides based on the cash ratio.
+    The higher the cash ratio, the more likely we are to buy.
+    The lower the cash ratio, the more likely we are to sell.
+    """
+    buy_weight = max(1, floor(8 * cash_ratio) - 2)
+    sell_weight = max(1, floor(40 * (1 - cash_ratio)) - 32)
+    sides = [_BUY] * buy_weight + [_SELL] * sell_weight
+    random.shuffle(sides)  # Shuffle to mix buy/sell orders
+    return sides
+
+
 def _get_tickers_to_trade(client: httpx.Client) -> list[str]:
     """Return the fixed majors plus *NUM_EXTRA_ASSETS* random tickers."""
     tickers_list = get_tickers(client)
@@ -67,6 +82,13 @@ def _get_tickers_to_trade(client: httpx.Client) -> list[str]:
     extra_pool = [t for t in tickers_list if t not in majors]
     extras = random.sample(extra_pool, min(NUM_EXTRA_ASSETS, len(extra_pool)))
     return majors + extras
+
+
+def _get_existing_tickers(client: httpx.Client) -> list[str]:
+    """Return the list of tickers already being traded in the backend."""
+    assets_list = client.get("/balance").json().keys()
+    tickers_list = [f"{asset}/{QUOTE}" for asset in assets_list if asset != QUOTE]
+    return tickers_list
 
 
 def _floor_to_first_sig(x: float) -> float:
@@ -87,17 +109,24 @@ def main() -> None:
     with httpx.Client(base_url=BASE_URL, timeout=20.0, headers=HEADERS) as client:
         # Seed the wallet once per container start
         if RESET_PORTFOLIO:
+            tickers = _get_tickers_to_trade(client)
             reset_and_fund(client, QUOTE, FUNDING_AMOUNT)
             print("Reenitialized wallet with funding amount:", FUNDING_AMOUNT)
         else:
             print(
                 "The portfolio has not been reset. Continuing with the existing state."
             )
-
-        tickers = _get_tickers_to_trade(client)
+            tickers = _get_existing_tickers(client)
+        print("Trading the following tickers:", ", ".join(tickers))
 
         while True:
             last_balances = client.get("/balance").json()
+            overview_balances = get_overview_balances(client)
+            total_equity = overview_balances["total_equity"]
+            cash_equity = overview_balances["cash_total_value"]
+            ratio_cash_equity = cash_equity / total_equity if total_equity > 0 else 0.0
+            sides = define_sides_probability(ratio_cash_equity)
+            print(f"Cash ratio: {ratio_cash_equity:.2%} | Sides: {sides}")
 
             n_orders = random.randint(MIN_ORDERS_PER_BATCH, MAX_ORDERS_PER_BATCH)
             batch = random.sample(tickers, n_orders)
@@ -105,11 +134,11 @@ def main() -> None:
 
             for symbol in batch:
                 asset = symbol.split("/")[0]
-                side = random.choice(SIDES)
+                side = random.choice(sides)
 
                 # Sell only if we actually hold the asset
-                if side == "sell" and asset not in last_balances:
-                    side = "buy"
+                if side == _SELL and asset not in last_balances:
+                    side = _BUY
 
                 # Randomly choose an order type to test both limit and market orders
                 order_type = random.choice(TRADING_TYPES)
@@ -117,7 +146,7 @@ def main() -> None:
                 if order_type == "limit":
                     px = px * random.gauss(1.0, 0.0005)
 
-                if side == "buy":
+                if side == _BUY:
                     cash_free = last_balances[QUOTE]["free"]
                     if cash_free < MIN_BALANCE_CASH_QUOTE:
                         # Skip if no free cash available
@@ -138,7 +167,6 @@ def main() -> None:
                         # Skip if no free asset available
                         print(f"Skipping {symbol} sell order: no free asset available.")
                         continue
-                    total_equity = get_overview_balances(client)["total_equity"]
                     fast_ticket_amount_q = total_equity * FAST_SELL_TICKET_AMOUNT_RATIO
                     if balance_free_asset_q >= (2 * fast_ticket_amount_q):
                         # If we have "a lot of asset", use a fast ticket amount,

@@ -69,7 +69,6 @@ docker compose down
 | **BASE_ASSETS_TO_BUY**         | `BTC,ETH,SOL,XRP,BNB,ADA,DOGE,DOT`                        | Comma-separated list of core assets to trade.                                              |
 | **NUM_EXTRA_ASSETS**           | `4`                                                       | Number of additional (random) assets to include beyond the base list.             |
 | **TRADING_TYPES**              | `market,limit`                                           | Order types to randomly choose from.                                                       |
-| **SIDES**                      | `buy,buy,sell`                                            | Distribution of trade sides (2 × “buy”, 1 × “sell”).                                        |
 | **MIN_ORDERS_PER_BATCH**       | `1`                                                       | Minimum number of orders generated in each batch.                                          |
 | **MAX_ORDERS_PER_BATCH**       | `3`                                                       | Maximum number of orders generated in each batch.                                          |
 | **MIN_SLEEP**                  | `30`                                                      | Minimum seconds to wait between batches.                                                   |
