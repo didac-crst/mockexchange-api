@@ -50,6 +50,9 @@ MIN_ORDER_QUOTE = float(os.getenv("MIN_ORDER_QUOTE", 1.0))
 MIN_BALANCE_CASH_QUOTE = float(os.getenv("MIN_BALANCE_CASH_QUOTE", 100.0))
 MIN_BALANCE_ASSETS_QUOTE = float(os.getenv("MIN_BALANCE_ASSETS_QUOTE", 2.0))
 
+# Reset portfolio on container start?
+RESET_PORTFOLIO = os.getenv("RESET_PORTFOLIO", "false").lower() in ("true", "1", "yes")
+
 # HTTP headers (add API key only if provided)
 HEADERS = {"x-api-key": API_KEY} if TEST_ENV else None
 
@@ -83,8 +86,13 @@ def _floor_to_first_sig(x: float) -> float:
 def main() -> None:
     with httpx.Client(base_url=BASE_URL, timeout=20.0, headers=HEADERS) as client:
         # Seed the wallet once per container start
-        reset_and_fund(client, QUOTE, FUNDING_AMOUNT)
-        print("Reenitialized wallet with funding amount:", FUNDING_AMOUNT)
+        if RESET_PORTFOLIO:
+            reset_and_fund(client, QUOTE, FUNDING_AMOUNT)
+            print("Reenitialized wallet with funding amount:", FUNDING_AMOUNT)
+        else:
+            print(
+                "The portfolio has not been reset. Continuing with the existing state."
+            )
 
         tickers = _get_tickers_to_trade(client)
 
@@ -132,10 +140,13 @@ def main() -> None:
                         continue
                     total_equity = get_overview_balances(client)["total_equity"]
                     fast_ticket_amount_q = total_equity * FAST_SELL_TICKET_AMOUNT_RATIO
-                    if balance_free_asset_q >= fast_ticket_amount_q:
+                    if balance_free_asset_q >= (2 * fast_ticket_amount_q):
                         # If we have "a lot of asset", use a fast ticket amount,
-                        # to sell it quickly
+                        # to sell it quickly.
                         # This is to avoid small shares being sold at a loss.
+                        # The threshold is set to 2x the fast ticket amount.
+                        # If it was only 1x, we would be selling the whole asset,
+                        # only if we have exactly the fast ticket amount.
                         ticket_amount_q = fast_ticket_amount_q
                     elif balance_free_asset_q > NOMINTAL_TICKET_QUOTE:
                         # If we have "a little bit" of free asset, use a nominal ticket quote.
