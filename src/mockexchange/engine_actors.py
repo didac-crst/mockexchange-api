@@ -8,7 +8,7 @@ from __future__ import annotations
 import itertools, os, random, threading, time
 import base64, hashlib
 from datetime import timedelta
-from typing import Dict, List
+from typing import Dict, List, Any
 from collections import defaultdict
 import math
 
@@ -100,14 +100,14 @@ class OrderBookActor(_BaseActor):
 
 
 # ---------- Engine actor -------------------------------------------------- #
-class ExchangeEngineActor(pykka.ThreadingActor):
+class ExchangeEngineActor(_BaseActor):
     """
     One instance per process.  
     Every public method runs in this actor’s thread ⇒ no data races.
     """
 
     def __init__(self, *, redis_url: str, commission: float, cash_asset: str = "USDT"):
-        super().__init__()
+        _BaseActor.__init__(self, redis_url)      # <- brings self.redis
         self.cash_asset = cash_asset
         self.commission = commission
         self._oid = itertools.count(1)
@@ -223,6 +223,111 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         status_prefix = order.status.label
         logger.info("%s %s", status_prefix, base_msg)
 
+    def _update_trade_stats(
+        self,
+        symbol: str,
+        side: OrderSide,
+        amount: float,      # base units
+        notional: float,    # quote units
+        fee: float,         # quote units
+        asset_fee: str,     # fee asset, usually the quote currency
+    ) -> None:
+        """
+        Compact trade counters.
+
+        ─ trades:<SIDE>:<BASE>:count        {"BTC": …, "ETH": …}
+        ─ trades:<SIDE>:<BASE>:amount       {"BTC": …, "ETH": …}
+        ─ trades:<SIDE>:<BASE>:notional     {"BTC": …, "ETH": …}
+        ─ trades:<SIDE>:<BASE>:fee          {"BTC": …, "ETH": …}
+        """
+        base, quote = symbol.split("/")
+
+        pipe = self.redis.pipeline()
+        # Need to keep track of the key structure:
+        count_valkey = f"trades:{side.value}:{base}:count"
+        amount_valkey = f"trades:{side.value}:{base}:amount"
+        notional_valkey = f"trades:{side.value}:{base}:notional"
+        fee_valkey = f"trades:{side.value}:{base}:fee"
+        # Increment the counters atomically
+        pipe.hincrby(count_valkey, quote, 1)                     # Number of trades for `base` in `quote`
+        pipe.hincrbyfloat(amount_valkey, quote, amount)          # Bought `base` with `quote`
+        pipe.hincrbyfloat(notional_valkey, quote, notional)      # Paid the notional with `quote` to trade `base`
+        pipe.hincrbyfloat(fee_valkey, asset_fee, fee)            # Paid the fee with `asset_fee` to trade `base`
+        # Remember the hash-keys so we can enumerate/reset later -------------
+        # a small helper list to avoid repetition
+        index_ops = [
+            ("trades:index:count",    count_valkey),
+            ("trades:index:amount",   amount_valkey),
+            ("trades:index:notional", notional_valkey),
+            ("trades:index:fee",      fee_valkey),
+        ]
+
+        for set_name, hash_key in index_ops:
+            pipe.sadd(set_name, hash_key)
+
+        pipe.execute()   # ← atomic MULTI/EXEC
+
+    def get_trade_stats(
+        self,
+        *,
+        side: OrderSide | str | None = None,
+        assets: list[str] | str | None = None,          # "BTC", "USDT", …
+    ) -> dict[str, Any]:
+        """
+        Return the counters in the familiar structure ::
+
+            {
+                "BUY":  {"count": {...}, "amount": {...}, "notional": {...}, "fee": {...}},
+                "SELL": { ... }
+            }
+
+        Optional filters
+        ----------------
+        side   – restrict output to BUY or SELL  
+        asset  – return only fields whose *name* equals that asset
+        """
+        # 1️⃣ normalise input ----------------------------------------------------
+        if isinstance(side, str):
+            side = OrderSide(side)
+
+        if isinstance(assets, str):
+            assets = [assets]
+
+        # helper ────────────────────────────────────────────────────────────────
+        def _collect(metric: str, _side: OrderSide, _assets: list[str] | None) -> dict[str, float]:
+            """
+            Gather all hashes whose key matches:
+                trades:<_side>:*:<metric>
+            """
+            index_key = f"trades:index:{metric}"
+            keys = [k for k in self.redis.smembers(index_key)
+                    if k.split(":")[1] == _side.value]
+
+            pipe = self.redis.pipeline()
+            base_list = list()
+            for k in keys:
+                base = k.split(":")[2]
+                if _assets and base not in _assets:
+                    continue
+                base_list.append(base)
+                pipe.hgetall(k)
+            raw = pipe.execute() if keys else []
+            raw_dict = {base: r for base, r in zip(base_list, raw) if r}
+            return raw_dict
+
+        # 2️⃣ build the response -------------------------------------------------
+        wanted_sides = [side] if side else (OrderSide.BUY, OrderSide.SELL)
+        out: dict[str, Any] = {}
+        for s in wanted_sides:
+            out[s.value.upper()] = {
+                "count":    _collect("count",    s, assets),
+                "amount":   _collect("amount",   s, assets),
+                "notional": _collect("notional", s, assets),
+                "fee":      _collect("fee",      s, assets),
+            }
+
+        return out
+
     # ---------- core balance moves ------------------------------------ #
     def _execute_buy(
         self,
@@ -251,6 +356,14 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         asset = self.portfolio.get(base).get()
         asset.free += fillable_amount
         self.portfolio.set(asset)
+        self._update_trade_stats(
+            symbol=f"{base}/{quote}",
+            side=OrderSide.BUY,
+            amount=fillable_amount,
+            notional=filled_notion,
+            fee=filled_fee,
+            asset_fee=quote,  # fee is usually in the quote currency
+        )
         return {"filled_notion": filled_notion, "filled_fee": filled_fee}
 
     def _execute_sell(
@@ -281,6 +394,14 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         cash = self.portfolio.get(quote).get()
         cash.free += (filled_notion - filled_fee)
         self.portfolio.set(cash)
+        self._update_trade_stats(
+            symbol=f"{base}/{quote}",
+            side=OrderSide.SELL,
+            amount=fillable_amount,
+            notional=filled_notion,
+            fee=filled_fee,
+            asset_fee=quote,  # fee is usually in the quote currency
+        )
         return {"filled_notion": filled_notion, "filled_fee": filled_fee}
     
     # ---------- consistency checks ------------------------------------ #
@@ -925,6 +1046,47 @@ class ExchangeEngineActor(pykka.ThreadingActor):
         # 2️⃣ read the now‑current ticker snapshot and hand it back
         return self.market.fetch_ticker(symbol).get()
 
+    def _reset_trade_stats(self) -> int:
+        """
+        Remove every hash inserted by `_update_trade_stats()` **plus** the helper
+        index sets.
+
+        Returns
+        -------
+        int
+            Total number of Redis keys removed (hashes + index sets).
+        """
+        # 1️⃣ collect all hash keys via the index sets --------------------------
+        INDEX_SETS = (
+            "trades:index:count",
+            "trades:index:amount",
+            "trades:index:notional",
+            "trades:index:fee",
+        )
+
+        # Fetch members of every index set in one round-trip
+        pipe = self.redis.pipeline()
+        for s in INDEX_SETS:
+            pipe.smembers(s)
+        index_members: list[set[str]] = pipe.execute()
+
+        # Flatten to a list of hash-keys; keep only non-empty strings
+        hash_keys: list[str] = [
+            k for member_set in index_members for k in member_set if k
+        ]
+
+        # 2️⃣ also purge the index sets themselves ------------------------------
+        keys_to_delete = hash_keys + list(INDEX_SETS)
+
+        if not keys_to_delete:
+            logger.info("Trade counters reset – nothing to delete")
+            return 0
+
+        deleted = self.redis.unlink(*keys_to_delete)  # non-blocking in Redis ≥4
+        logger.info("Trade counters reset – %d keys removed", deleted)
+
+        return deleted
+
     def reset(self):
         self.portfolio.clear()
         self.order_book.clear()
@@ -933,6 +1095,7 @@ class ExchangeEngineActor(pykka.ThreadingActor):
             t.cancel()
         self._timers.clear()
         self._oid = itertools.count(1)
+        self._reset_trade_stats()
 
     # ---------- message handler & lifecycle --------------------------- #
     def on_receive(self, msg):

@@ -312,6 +312,17 @@ def get_summary_assets():
     sum_assets_bal = _g(ENGINE.get_summary_assets())
     return sum_assets_bal
 
+@app.get("/overview/trades", tags=["Overview"])
+def get_summary_trades(
+    assets: str | None = Query(None),
+    # assets: str | None = None,
+    side: _TRADING_SIDES | None = Query(None),
+):
+    # turn "BTC,ETH" → ["BTC", "ETH"]; keep None if nothing supplied
+    assets_list = [s.strip() for s in assets.split(",") if s.strip()] if assets else None
+    sum_trades = _g(ENGINE.get_trade_stats(assets=assets_list, side=side))
+    return sum_trades
+
 
 # admin ------------------------------------------------------------------ #
 @app.patch(
@@ -379,6 +390,7 @@ def i_am_leader() -> bool:
 async def tick_loop():
     while True:
         logger.debug(f"Tick loop started - REFRESH_S: {REFRESH_S} seconds")
+        start_time = time.time()
         try:
             if i_am_leader():
                 for t in ENGINE.tickers.get():
@@ -390,7 +402,8 @@ async def tick_loop():
             # If an error occurs, we log it and continue the loop
         finally:
             # As it is a matter of seconds, we can afford to skip 1 tick
-            await asyncio.sleep(REFRESH_S)
+            elapsed = time.time() - start_time
+            await asyncio.sleep(max(1, REFRESH_S - elapsed))
 
 
 async def prune_and_expire_loop():
