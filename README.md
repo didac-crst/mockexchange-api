@@ -73,7 +73,6 @@ then start **MockExchange** as shown above.
 | `MIN_TIME_ANSWER_ORDER_MARKET` | `3` | Lower bound for artificial latency (seconds) before a market order is filled. |
 | `MAX_TIME_ANSWER_ORDER_MARKET` | `5` | Upper bound for the artificial latency. |
 | `SIGMA_FILL_MARKET_ORDER` | `0.1` | Standard‑deviation parameter that controls the random partial‑fill ratio for simulated market orders – higher values mean more variability and a greater chance of partial fills. |
-| `URL_API` | *(unset)* | Base-URL used by integration tests. Example: `https://mockexchange.your-domain.com/`. |
 
 ### `.env` template  
 
