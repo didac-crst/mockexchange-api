@@ -11,26 +11,32 @@ from math import floor, log10
 from typing import Final
 
 # ---------- helpers from your own codebase ----------
-from helpers import reset_and_fund, get_tickers, place_order, get_last_prices
+from helpers import (
+    reset_and_fund,
+    get_tickers,
+    place_order,
+    get_last_prices,
+    get_overview_balances,
+)
 
 # ────────────────────────────────────────────────────
 # Configuration via ENV (with sensible defaults)
 # ────────────────────────────────────────────────────
-BASE_URL          = os.getenv("URL_API", "http://localhost:8000")
-API_KEY           = os.getenv("API_KEY") or None   # optional
-TEST_ENV         = os.getenv("TEST_ENV", "true").lower() in ("true", "1", "yes")
+BASE_URL = os.getenv("URL_API", "http://localhost:8000")
+API_KEY = os.getenv("API_KEY") or None  # optional
+TEST_ENV = os.getenv("TEST_ENV", "true").lower() in ("true", "1", "yes")
 
-QUOTE             = os.getenv("QUOTE_ASSET", "USDT")
-FUNDING_AMOUNT    = float(os.getenv("FUNDING_AMOUNT", 100_000))
+QUOTE = os.getenv("QUOTE_ASSET", "USDT")
+FUNDING_AMOUNT = float(os.getenv("FUNDING_AMOUNT", 100_000))
 
 BASE_ASSETS_TO_BUY = os.getenv(
     "BASE_ASSETS_TO_BUY",
     "BTC,ETH,SOL,XRP,BNB,ADA,DOGE,DOT",
 ).split(",")
 
-NUM_EXTRA_ASSETS  = int(os.getenv("NUM_EXTRA_ASSETS", 8))
-TRADING_TYPES     = os.getenv("TRADING_TYPES", "market,limit").split(",")
-SIDES             = os.getenv("SIDES", "buy,sell").split(",")
+NUM_EXTRA_ASSETS = int(os.getenv("NUM_EXTRA_ASSETS", 8))
+TRADING_TYPES = os.getenv("TRADING_TYPES", "market,limit").split(",")
+SIDES = os.getenv("SIDES", "buy,sell").split(",")
 
 MIN_ORDERS_PER_BATCH = int(os.getenv("MIN_ORDERS_PER_BATCH", 1))
 MAX_ORDERS_PER_BATCH = int(os.getenv("MAX_ORDERS_PER_BATCH", 3))
@@ -38,8 +44,11 @@ MAX_ORDERS_PER_BATCH = int(os.getenv("MAX_ORDERS_PER_BATCH", 3))
 MIN_SLEEP = float(os.getenv("MIN_SLEEP", 30))
 MAX_SLEEP = float(os.getenv("MAX_SLEEP", 60))
 
-MIN_AMOUNT_RATIO = float(os.getenv("MIN_AMOUNT_RATIO", 0.01))
-MAX_AMOUNT_RATIO = float(os.getenv("MAX_AMOUNT_RATIO", 0.05))
+NOMINTAL_TICKET_QUOTE = float(os.getenv("NOMINTAL_TICKET_QUOTE", 50.0))
+FAST_SELL_TICKET_AMOUNT_RATIO = float(os.getenv("FAST_SELL_TICKET_AMOUNT_RATIO", 0.005))
+MIN_ORDER_QUOTE = float(os.getenv("MIN_ORDER_QUOTE", 1.0))
+MIN_BALANCE_CASH_QUOTE = float(os.getenv("MIN_BALANCE_CASH_QUOTE", 100.0))
+MIN_BALANCE_ASSETS_QUOTE = float(os.getenv("MIN_BALANCE_ASSETS_QUOTE", 2.0))
 
 # HTTP headers (add API key only if provided)
 HEADERS = {"x-api-key": API_KEY} if TEST_ENV else None
@@ -63,9 +72,9 @@ def _floor_to_first_sig(x: float) -> float:
         return 0.0
     sign = -1.0 if x < 0 else 1.0
     ax = abs(x)
-    d = floor(log10(ax))               # exponent of first sig-digit
-    first_digit = floor(ax / 10 ** d)
-    return sign * first_digit * 10 ** d
+    d = floor(log10(ax))  # exponent of first sig-digit
+    first_digit = floor(ax / 10**d)
+    return sign * first_digit * 10**d
 
 
 # ────────────────────────────────────────────────────
@@ -75,6 +84,7 @@ def main() -> None:
     with httpx.Client(base_url=BASE_URL, timeout=20.0, headers=HEADERS) as client:
         # Seed the wallet once per container start
         reset_and_fund(client, QUOTE, FUNDING_AMOUNT)
+        print("Reenitialized wallet with funding amount:", FUNDING_AMOUNT)
 
         tickers = _get_tickers_to_trade(client)
 
@@ -93,18 +103,59 @@ def main() -> None:
                 if side == "sell" and asset not in last_balances:
                     side = "buy"
 
+                # Randomly choose an order type to test both limit and market orders
                 order_type = random.choice(TRADING_TYPES)
-                ratio = random.uniform(MIN_AMOUNT_RATIO, MAX_AMOUNT_RATIO)
+                px = last_prices[symbol]
+                if order_type == "limit":
+                    px = px * random.gauss(1.0, 0.0005)
 
                 if side == "buy":
                     cash_free = last_balances[QUOTE]["free"]
-                    notional = cash_free * ratio
-                    amount = _floor_to_first_sig(notional / last_prices[symbol])
+                    if cash_free < MIN_BALANCE_CASH_QUOTE:
+                        # Skip if no free cash available
+                        print(f"Skipping {symbol} buy order: no free cash available.")
+                        continue
+                    elif cash_free > NOMINTAL_TICKET_QUOTE:
+                        # If we have enough free cash, use a nominal ticket quote
+                        ticket_amount_q = NOMINTAL_TICKET_QUOTE
+                    else:
+                        # If we don't have enough free cash, use everything we have
+                        # minus a small buffer to avoid rejecting orders due to insufficient balance
+                        # or not being able to pay fees.
+                        ticket_amount_q = cash_free - MIN_BALANCE_CASH_QUOTE
                 else:
-                    asset_free = last_balances[asset]["free"]
-                    amount = _floor_to_first_sig(asset_free * ratio)
-
-                limit_price = last_prices[symbol] * random.gauss(1.0, 0.0005)
+                    balance_free_asset = last_balances[asset]["free"]
+                    if balance_free_asset < MIN_BALANCE_ASSETS_QUOTE:
+                        # Skip if no free asset available
+                        print(f"Skipping {symbol} sell order: no free asset available.")
+                        continue
+                    balance_free_asset_q = balance_free_asset * px
+                    total_equity = get_overview_balances(client)["total_equity"]
+                    fast_ticket_amount_q = total_equity * FAST_SELL_TICKET_AMOUNT_RATIO
+                    if balance_free_asset_q >= fast_ticket_amount_q:
+                        # If we have "a lot of asset", use a fast ticket amount,
+                        # to sell it quickly
+                        # This is to avoid small shares being sold at a loss.
+                        ticket_amount_q = fast_ticket_amount_q
+                    elif balance_free_asset_q > NOMINTAL_TICKET_QUOTE:
+                        # If we have "a little bit" of free asset, use a nominal ticket quote.
+                        ticket_amount_q = NOMINTAL_TICKET_QUOTE
+                    else:
+                        # If we have "a very little bit" of free asset.
+                        # We keep some buffer to avoid rejecting orders due to insufficient balance.
+                        ticket_amount_q = (
+                            balance_free_asset_q - MIN_BALANCE_ASSETS_QUOTE
+                        )
+                # Calculate the amount to sell
+                if ticket_amount_q < MIN_ORDER_QUOTE:
+                    # Skip if the ticket amount is below the minimum order quote
+                    print(
+                        f"Skipping {symbol} {side} order: "
+                        f"ticket amount {ticket_amount_q:.2f} is below minimum {MIN_ORDER_QUOTE:.2f}."
+                    )
+                    continue
+                # Calculate the amount to buy/sell
+                ticket_amount = ticket_amount_q / px
 
                 order = place_order(
                     client,
@@ -112,15 +163,20 @@ def main() -> None:
                         "symbol": symbol,
                         "side": side,
                         "type": order_type,
-                        "amount": amount,
-                        "limit_price": limit_price,
+                        "amount": ticket_amount,
+                        "limit_price": px if order_type == "limit" else None,
                     },
                 )
 
+                limit_price = order["limit_price"]
+                limit_price_str = (
+                    f"{px:>16,.4f}" if limit_price is not None else " " * 16
+                )
                 print(
-                    f"Status: {order['status']} | {order['symbol']} | "
-                    f"{order['side']} {order['type']} {order['amount']} "
-                    f"@ {order['limit_price']}"
+                    f"Status: {order['status']:<10} | "
+                    f"{order['symbol']:<15} | "
+                    f"{order['side']:<4} - {order['type']:<6} >> {order['amount']:>16,.4f} "
+                    f"@ {limit_price_str} [{ticket_amount_q:>10,.2f} {QUOTE}]"
                 )
 
             time.sleep(random.uniform(MIN_SLEEP, MAX_SLEEP))

@@ -75,6 +75,13 @@ def cancel_order(client: Client, order_id: str) -> None:
     client.post(f"/orders/{order_id}/cancel").raise_for_status()
 
 
+def get_overview_balances(client: Client) -> dict[str, float]:
+    """Get the total equity of the account."""
+    resp = client.get("/overview/assets")
+    resp.raise_for_status()
+    return resp.json()["balance_source"]
+
+
 # ────────────────── concurrent order submit ────────────────── #
 
 
