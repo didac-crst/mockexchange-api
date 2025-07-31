@@ -22,7 +22,7 @@ from helpers import (
 # ────────────────────────────────────────────────────
 # Configuration via ENV (with sensible defaults)
 # ────────────────────────────────────────────────────
-BASE_URL = os.getenv("URL_API", "http://localhost:8000")
+BASE_URL = os.getenv("API_URL", "http://localhost:8000")
 API_KEY = os.getenv("API_KEY") or None  # optional
 TEST_ENV = os.getenv("TEST_ENV", "true").lower() in ("true", "1", "yes")
 
