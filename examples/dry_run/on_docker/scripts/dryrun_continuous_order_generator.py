@@ -9,6 +9,7 @@ from __future__ import annotations
 import os, time, random, httpx
 from math import floor, log10
 from typing import Final
+from pathlib import Path
 
 # ---------- helpers from your own codebase ----------
 from helpers import (
@@ -50,10 +51,36 @@ MIN_BALANCE_CASH_QUOTE = float(os.getenv("MIN_BALANCE_CASH_QUOTE", 100.0))
 MIN_BALANCE_ASSETS_QUOTE = float(os.getenv("MIN_BALANCE_ASSETS_QUOTE", 2.0))
 
 # Reset portfolio on container start?
-RESET_PORTFOLIO = os.getenv("RESET_PORTFOLIO", "false").lower() in ("true", "1", "yes")
+# RESET_PORTFOLIO = os.getenv("RESET_PORTFOLIO", "false").lower() in ("true", "1", "yes")
 
 # HTTP headers (add API key only if provided)
 HEADERS = {"x-api-key": API_KEY} if TEST_ENV else None
+
+
+# ────────────────────────────────────────────────────
+# Reset function
+# ────────────────────────────────────────────────────
+
+RESET_FLAG = Path("/app/reset.flag")  # directory inside the Docker container
+
+
+def maybe_reset_api(client) -> list[str]:
+    if RESET_FLAG.exists():
+        print("🔄 Reset flag detected. Resetting API...")
+        try:
+            # Seed the wallet once per container start
+            tickers = _get_tickers_to_trade(client)
+            reset_and_fund(client, QUOTE, FUNDING_AMOUNT)
+            print("✅ Reenitialized wallet with funding amount:", FUNDING_AMOUNT)
+        except Exception as e:
+            print(f"❌ Reset failed: {e}")
+        finally:
+            RESET_FLAG.unlink()  # remove flag regardless of outcome
+    else:
+        print("🚀 No reset requested. Continuing as normal.")
+        tickers = _get_existing_tickers(client)
+    print("Trading the following tickers:", ", ".join(tickers))
+    return tickers
 
 
 # ────────────────────────────────────────────────────
@@ -108,17 +135,7 @@ def _floor_to_first_sig(x: float) -> float:
 def main() -> None:
     with httpx.Client(base_url=BASE_URL, timeout=20.0, headers=HEADERS) as client:
         # Seed the wallet once per container start
-        if RESET_PORTFOLIO:
-            tickers = _get_tickers_to_trade(client)
-            reset_and_fund(client, QUOTE, FUNDING_AMOUNT)
-            print("Reenitialized wallet with funding amount:", FUNDING_AMOUNT)
-        else:
-            print(
-                "The portfolio has not been reset. Continuing with the existing state."
-            )
-            tickers = _get_existing_tickers(client)
-        print("Trading the following tickers:", ", ".join(tickers))
-
+        tickers = maybe_reset_api(client=client)
         while True:
             last_balances = client.get("/balance").json()
             overview_balances = get_overview_balances(client)
