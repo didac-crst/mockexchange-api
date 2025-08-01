@@ -231,6 +231,7 @@ class ExchangeEngineActor(_BaseActor):
         notional: float,    # quote units
         fee: float,         # quote units
         asset_fee: str,     # fee asset, usually the quote currency
+        is_new: bool = True,  # whether this is the first trade for the corresponding order
     ) -> None:
         """
         Compact trade counters.
@@ -249,7 +250,8 @@ class ExchangeEngineActor(_BaseActor):
         notional_valkey = f"trades:{side.value}:{base}:notional"
         fee_valkey = f"trades:{side.value}:{base}:fee"
         # Increment the counters atomically
-        pipe.hincrby(count_valkey, quote, 1)                     # Number of trades for `base` in `quote`
+        if is_new: # In case the order is already partially filled, we do not increment the counters
+            pipe.hincrby(count_valkey, quote, 1)                     # Number of trades for `base` in `quote`
         pipe.hincrbyfloat(amount_valkey, quote, amount)          # Bought `base` with `quote`
         pipe.hincrbyfloat(notional_valkey, quote, notional)      # Paid the notional with `quote` to trade `base`
         pipe.hincrbyfloat(fee_valkey, asset_fee, fee)            # Paid the fee with `asset_fee` to trade `base`
@@ -336,6 +338,7 @@ class ExchangeEngineActor(_BaseActor):
         quote: str,
         fillable_amount: float,
         price: float,
+        order_is_new: bool,
         order_will_close: bool,
         residual_quote: float,
     ) -> Dict[str, float]:
@@ -363,6 +366,7 @@ class ExchangeEngineActor(_BaseActor):
             notional=filled_notion,
             fee=filled_fee,
             asset_fee=quote,  # fee is usually in the quote currency
+            is_new=order_is_new,
         )
         return {"filled_notion": filled_notion, "filled_fee": filled_fee}
 
@@ -373,6 +377,7 @@ class ExchangeEngineActor(_BaseActor):
         quote: str,
         fillable_amount: float,
         price: float,
+        order_is_new: bool,
         order_will_close: bool,
         residual_quote: float,
     ) -> Dict[str, float]:
@@ -401,6 +406,7 @@ class ExchangeEngineActor(_BaseActor):
             notional=filled_notion,
             fee=filled_fee,
             asset_fee=quote,  # fee is usually in the quote currency
+            is_new=order_is_new,
         )
         return {"filled_notion": filled_notion, "filled_fee": filled_fee}
     
@@ -651,6 +657,7 @@ class ExchangeEngineActor(_BaseActor):
         o = o_fresh
         fillable = False
         need_amount = o.amount - o.actual_filled
+        order_is_new = (o.status is OrderState.NEW)
         # Simulate slippage
         total_amount_available = ask_volume if o.side is OrderSide.BUY else bid_volume
         amount_available = self._slippage_simulate(total_amount_available, SIGMA_FILL)
@@ -719,6 +726,7 @@ class ExchangeEngineActor(_BaseActor):
             quote=quote,
             fillable_amount=fillable_amount,
             price=px,
+            order_is_new=order_is_new,
             order_will_close=order_will_close,
             residual_quote=o.residual_quote,
         )
