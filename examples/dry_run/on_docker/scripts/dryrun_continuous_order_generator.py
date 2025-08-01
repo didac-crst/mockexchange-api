@@ -50,9 +50,6 @@ MIN_ORDER_QUOTE = float(os.getenv("MIN_ORDER_QUOTE", 1.0))
 MIN_BALANCE_CASH_QUOTE = float(os.getenv("MIN_BALANCE_CASH_QUOTE", 100.0))
 MIN_BALANCE_ASSETS_QUOTE = float(os.getenv("MIN_BALANCE_ASSETS_QUOTE", 2.0))
 
-# Reset portfolio on container start?
-# RESET_PORTFOLIO = os.getenv("RESET_PORTFOLIO", "false").lower() in ("true", "1", "yes")
-
 # HTTP headers (add API key only if provided)
 HEADERS = {"x-api-key": API_KEY} if TEST_ENV else None
 
@@ -136,6 +133,10 @@ def main() -> None:
     with httpx.Client(base_url=BASE_URL, timeout=20.0, headers=HEADERS) as client:
         # Seed the wallet once per container start
         tickers = maybe_reset_api(client=client)
+        n_tickers = len(tickers)
+        max_orders_per_batch = min(
+            MAX_ORDERS_PER_BATCH, n_tickers
+        )  # Ensure we don't exceed available tickers
         while True:
             last_balances = client.get("/balance").json()
             overview_balances = get_overview_balances(client)
@@ -144,8 +145,7 @@ def main() -> None:
             ratio_cash_equity = cash_equity / total_equity if total_equity > 0 else 0.0
             sides = define_sides_probability(ratio_cash_equity)
             print(f"Cash ratio: {ratio_cash_equity:.2%} | Sides: {sides}")
-
-            n_orders = random.randint(MIN_ORDERS_PER_BATCH, MAX_ORDERS_PER_BATCH)
+            n_orders = random.randint(MIN_ORDERS_PER_BATCH, max_orders_per_batch)
             batch = random.sample(tickers, n_orders)
             last_prices = get_last_prices(client, batch)
 
