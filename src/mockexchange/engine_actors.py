@@ -38,6 +38,16 @@ MAX_TIME = float(os.getenv("MAX_TIME_ANSWER_ORDER_MARKET", 1))
 SIGMA_FILL = float(os.getenv("SIGMA_FILL_MARKET_ORDER", 0.1))
 # ────────────────────────────────────────────
 
+# ---------- Constants ------------------------------------------------ #
+
+TRADES_INDEX_COUNT = "trades:index:count"
+TRADES_INDEX_AMOUNT = "trades:index:amount"
+TRADES_INDEX_NOTIONAL = "trades:index:notional"
+TRADES_INDEX_FEE = "trades:index:fee"
+
+FUNDS_INDEX = "funds:index"
+WITHDRAW_INDEX = "withdraws:index"
+
 
 # ---------- Domain actors ------------------------------------------------ #
 class _BaseActor(pykka.ThreadingActor):
@@ -258,77 +268,67 @@ class ExchangeEngineActor(_BaseActor):
         # Remember the hash-keys so we can enumerate/reset later -------------
         # a small helper list to avoid repetition
         index_ops = [
-            ("trades:index:count",    count_valkey),
-            ("trades:index:amount",   amount_valkey),
-            ("trades:index:notional", notional_valkey),
-            ("trades:index:fee",      fee_valkey),
+            (TRADES_INDEX_COUNT, count_valkey),
+            (TRADES_INDEX_AMOUNT, amount_valkey),
+            (TRADES_INDEX_NOTIONAL, notional_valkey),
+            (TRADES_INDEX_FEE, fee_valkey),
         ]
 
         for set_name, hash_key in index_ops:
             pipe.sadd(set_name, hash_key)
 
         pipe.execute()   # ← atomic MULTI/EXEC
-
-    def get_trade_stats(
+    
+    def _update_fund_account(
         self,
-        *,
-        side: OrderSide | str | None = None,
-        assets: list[str] | str | None = None,          # "BTC", "USDT", …
-    ) -> dict[str, Any]:
+        asset: str,
+        amount: float,
+    ) -> None:
         """
-        Return the counters in the familiar structure ::
+        Update the fund account for a specific asset.
 
-            {
-                "BUY":  {"count": {...}, "amount": {...}, "notional": {...}, "fee": {...}},
-                "SELL": { ... }
-            }
-
-        Optional filters
-        ----------------
-        side   – restrict output to BUY or SELL  
-        asset  – return only fields whose *name* equals that asset
+        If `is_new` is True, a new fund account will be created if it doesn't exist.
         """
-        # 1️⃣ normalise input ----------------------------------------------------
-        if isinstance(side, str):
-            side = OrderSide(side)
+        pipe = self.redis.pipeline()
+        fund_key = f"funds:{asset}"
+        pipe.sadd(FUNDS_INDEX, fund_key)
+        # set ref_symbol (self.cash_asset) is; only if not already present
+        pipe.hsetnx(fund_key, "ref_symbol", self.cash_asset)
+        pipe.hincrbyfloat(fund_key, "asset_quantity", amount)
+        if asset == self.cash_asset:
+            value = amount # Cash asset is always 1:1
+        else:
+            symbol = f"{asset}/{self.cash_asset}"
+            value = amount * self.market.last_price(symbol).get()
+        pipe.hincrbyfloat(fund_key, "ref_value", value)
+        pipe.execute()
+        logger.info("Funded %.8f %s to fund account", amount, asset)
+    
+    def _update_withdraw_account(
+        self,
+        asset: str,
+        amount: float,
+    ) -> None:
+        """
+        Update the withdraw account for a specific asset.
 
-        if isinstance(assets, str):
-            assets = [assets]
+        If `is_new` is True, a new withdraw account will be created if it doesn't exist.
+        """
+        pipe = self.redis.pipeline()
+        withdraw_key = f"withdraws:{asset}"
+        pipe.sadd(WITHDRAW_INDEX, withdraw_key)
+        # set ref_symbol (self.cash_asset) is; only if not already present
+        pipe.hsetnx(withdraw_key, "ref_symbol", self.cash_asset)
+        pipe.hincrbyfloat(withdraw_key, "asset_quantity", amount)
+        if asset == self.cash_asset:
+            value = amount  # Cash asset is always 1:1
+        else:
+            symbol = f"{asset}/{self.cash_asset}"
+            value = amount * self.market.last_price(symbol).get()
+        pipe.hincrbyfloat(withdraw_key, "ref_value", value)
+        pipe.execute()
 
-        # helper ────────────────────────────────────────────────────────────────
-        def _collect(metric: str, _side: OrderSide, _assets: list[str] | None) -> dict[str, float]:
-            """
-            Gather all hashes whose key matches:
-                trades:<_side>:*:<metric>
-            """
-            index_key = f"trades:index:{metric}"
-            keys = [k for k in self.redis.smembers(index_key)
-                    if k.split(":")[1] == _side.value]
-
-            pipe = self.redis.pipeline()
-            base_list = list()
-            for k in keys:
-                base = k.split(":")[2]
-                if _assets and base not in _assets:
-                    continue
-                base_list.append(base)
-                pipe.hgetall(k)
-            raw = pipe.execute() if keys else []
-            raw_dict = {base: r for base, r in zip(base_list, raw) if r}
-            return raw_dict
-
-        # 2️⃣ build the response -------------------------------------------------
-        wanted_sides = [side] if side else (OrderSide.BUY, OrderSide.SELL)
-        out: dict[str, Any] = {}
-        for s in wanted_sides:
-            out[s.value.upper()] = {
-                "count":    _collect("count",    s, assets),
-                "amount":   _collect("amount",   s, assets),
-                "notional": _collect("notional", s, assets),
-                "fee":      _collect("fee",      s, assets),
-            }
-
-        return out
+        logger.info("Withdrew %.8f %s from withdraw account", amount, asset)
 
     # ---------- core balance moves ------------------------------------ #
     def _execute_buy(
@@ -1018,6 +1018,184 @@ class ExchangeEngineActor(_BaseActor):
         }
         return output
 
+    def get_trade_stats(
+        self,
+        *,
+        side: OrderSide | str | None = None,
+        assets: list[str] | str | None = None,          # "BTC", "USDT", …
+    ) -> dict[str, Any]:
+        """
+        Return the counters in the familiar structure ::
+
+            {
+                "BUY":  {"count": {...}, "amount": {...}, "notional": {...}, "fee": {...}},
+                "SELL": { ... }
+            }
+
+        Optional filters
+        ----------------
+        side   – restrict output to BUY or SELL  
+        asset  – return only fields whose *name* equals that asset
+        """
+        # 1️⃣ normalise input ----------------------------------------------------
+        if isinstance(side, str):
+            side = OrderSide(side)
+
+        if isinstance(assets, str):
+            assets = [assets]
+
+        # helper ────────────────────────────────────────────────────────────────
+        def _collect(metric: str, _side: OrderSide, _assets: list[str] | None) -> dict[str, float]:
+            """
+            Gather all hashes whose key matches:
+                trades:<_side>:*:<metric>
+            """
+            index_key = f"trades:index:{metric}"
+            keys = [k for k in self.redis.smembers(index_key)
+                    if k.split(":")[1] == _side.value]
+
+            pipe = self.redis.pipeline()
+            base_list = list()
+            for k in keys:
+                base = k.split(":")[2]
+                if _assets and base not in _assets:
+                    continue
+                base_list.append(base)
+                pipe.hgetall(k)
+            raw = pipe.execute() if keys else []
+            raw_dict = {base: r for base, r in zip(base_list, raw) if r}
+            return raw_dict
+
+        # 2️⃣ build the response -------------------------------------------------
+        wanted_sides = [side] if side else (OrderSide.BUY, OrderSide.SELL)
+        out: dict[str, Any] = {}
+        for s in wanted_sides:
+            out[s.value.upper()] = {
+                "count":    _collect("count",    s, assets),
+                "amount":   _collect("amount",   s, assets),
+                "notional": _collect("notional", s, assets),
+                "fee":      _collect("fee",      s, assets),
+            }
+
+        return out
+    
+    def _get_investment_assets_list(self) -> list[str]:
+        """
+        Get a list of all investment assets in the portfolio.
+        This function retrieves all assets that have a fund or withdraw account.
+        It returns a list of asset names that have either a fund or withdraw account.
+        
+        Returns
+        -------
+        list[str]
+            A list of asset names that have either a fund or withdraw account.
+            If no assets have a fund or withdraw account, it returns an empty list.
+        """
+        assets = set()
+        hash_funds = self.redis.smembers(FUNDS_INDEX)
+        hash_withdraws = self.redis.smembers(WITHDRAW_INDEX)
+        if hash_funds:
+            for key in hash_funds:
+                asset = key.split(":")[1]
+                assets.add(asset)
+        if hash_withdraws:
+            for key in hash_withdraws:
+                asset = key.split(":")[1]
+                assets.add(asset)
+        # If no assets found, return empty list
+        if not assets:
+            return []
+        return list(assets)
+    
+    def _get_investment_asset(self, asset: str) -> dict[str, float]:
+        """
+        Get the investment and withdrawal accounts for a given asset.
+        This function retrieves the fund and withdraw accounts for the specified asset.
+        If the asset does not have a fund or withdraw account, it returns an empty dict for that account.
+        
+        Parameters
+        ----------
+        asset : str
+            The asset for which to retrieve the fund and withdraw accounts.
+
+        Returns
+        -------
+        dict[str, float]
+            A dictionary containing the fund and withdraw accounts for the specified asset.
+            The keys are "fund_account" and "withdraw_account", and the values are dictionaries
+            with asset balances (free and used) as floats.
+        If the asset does not have a fund or withdraw account, the corresponding value will be an empty dict.
+        If the asset does not exist, it will return empty dicts for both accounts.
+        """
+        FLOAT_KEYS = ("asset_quantity", "ref_value")
+        fmt_investment = lambda d: {k: float(v) if k in FLOAT_KEYS else v for k, v in d.items()}
+        fund_key = f"funds:{asset}"
+        withdraw_key = f"withdraws:{asset}"
+        output = dict()
+        # Check if the fund account exists
+        if fund_key in self.redis.smembers(FUNDS_INDEX):
+            output["fund"] = fmt_investment(self.redis.hgetall(fund_key))
+        else:
+            output["fund"] = {}
+        if withdraw_key in self.redis.smembers(WITHDRAW_INDEX):
+            output["withdraw"] = fmt_investment(self.redis.hgetall(withdraw_key))
+        else:
+            output["withdraw"] = {}
+        return output
+
+    def get_summary_capital(self, aggregation: bool = True) -> Dict[str, float]:
+        """
+        Get a summary of all capital related amounts in the portfolio.
+        - Total equity in the portfolio (free + used)
+        - Total funds.
+        - Total witdhdrawn funds.
+        - Performance.
+        """
+        # BALANCE ----------------------------------------------------
+        balance = self.fetch_balance()
+        # Get the prices for all assets in the portfolio
+        assets_list, tickers_list = self._get_assetslist_and_tickerslist_from_portfolio(balance)
+        prices = {t: self.market.last_price(t).get() for t in tickers_list}
+        for a, t in zip(assets_list, tickers_list):
+            _price = prices.get(t)
+            balance[a]["price"] = _price
+            balance[a]["value"] = _price * balance[a]["total"]
+        balance[self.cash_asset]["price"] = 1.0  # cash asset is always 1.0 
+        balance[self.cash_asset]["value"] = balance[self.cash_asset]["total"]
+        # INVESTMENT ASSETS ----------------------------------------
+        investment_accounts = dict()
+        # We will also use this to get the fund and withdraw accounts for each asset.
+        for asset in self._get_investment_assets_list():
+            investment_accounts[asset] = self._get_investment_asset(asset)
+        # AGGREGATION ----------------------------------------
+        # If aggregation is requested, we will aggregate the investment accounts
+        # by summing up the free and used amounts for each asset.
+        # This will give us a total capital in the portfolio.
+        if aggregation:
+            # Aggregate the investment accounts
+            equity = 0.0
+            funds = 0.0
+            withdraws = 0.0
+            for b in balance.values():
+                equity += b["value"]
+            for a, invest in investment_accounts.items():
+                funds += invest.get("fund", {}).get("ref_value", 0.0)
+                withdraws += invest.get("withdraw", {}).get("ref_value", 0.0)
+            # Prepare the output
+            output = {
+                "equity": equity,
+                "funds": funds,
+                "withdraws": withdraws,
+                "profit_loss": equity - (funds - withdraws),
+            }
+            return output
+        else:
+            # If aggregation is not requested, we will return the balance and investment accounts as is
+            return {
+                "balance": balance,
+                "investment_assets": investment_accounts,
+            }
+
     # ----- admin helpers ---------------------------------------------------- #
     def set_balance(self, asset: str, *, free: float = 0.0, used: float = 0.0):
         if free < 0 or used < 0:
@@ -1031,6 +1209,20 @@ class ExchangeEngineActor(_BaseActor):
         bal = self.portfolio.get(asset).get()
         bal.free += amount
         self.portfolio.set(bal)
+        self._update_fund_account(asset, amount)
+        # Return the updated balance
+        return bal.to_dict()
+    
+    def withdraw_asset(self, asset: str, amount: float):
+        if amount <= 0:
+            raise ValueError("amount must be > 0")
+        bal = self.portfolio.get(asset).get()
+        if bal.free < amount:
+            raise ValueError(f"Insufficient balance: {bal.free} {asset}, requested {amount} {asset}")
+        bal.free -= amount
+        self.portfolio.set(bal)
+        self._update_withdraw_account(asset, amount)
+        # Return the updated balance
         return bal.to_dict()
 
     def set_ticker(
@@ -1054,27 +1246,23 @@ class ExchangeEngineActor(_BaseActor):
         # 2️⃣ read the now‑current ticker snapshot and hand it back
         return self.market.fetch_ticker(symbol).get()
 
-    def _reset_trade_stats(self) -> int:
+    def _reset_hash_keys(self, index_set: list[str]) -> int:
         """
-        Remove every hash inserted by `_update_trade_stats()` **plus** the helper
-        index sets.
+        Remove every all hashes existing in the given index set **plus** the index sets themselves.
+
+        Parameters
+        ----------
+        index_set : list[str]
+            List of index set names (e.g. `["trades:index:count", "trades:index:amount"]`).
 
         Returns
         -------
         int
             Total number of Redis keys removed (hashes + index sets).
         """
-        # 1️⃣ collect all hash keys via the index sets --------------------------
-        INDEX_SETS = (
-            "trades:index:count",
-            "trades:index:amount",
-            "trades:index:notional",
-            "trades:index:fee",
-        )
-
         # Fetch members of every index set in one round-trip
         pipe = self.redis.pipeline()
-        for s in INDEX_SETS:
+        for s in index_set:
             pipe.smembers(s)
         index_members: list[set[str]] = pipe.execute()
 
@@ -1084,16 +1272,78 @@ class ExchangeEngineActor(_BaseActor):
         ]
 
         # 2️⃣ also purge the index sets themselves ------------------------------
-        keys_to_delete = hash_keys + list(INDEX_SETS)
+        keys_to_delete = hash_keys + list(index_set)
 
         if not keys_to_delete:
-            logger.info("Trade counters reset – nothing to delete")
+            logger.info("Hash counters already reset – nothing to delete")
             return 0
 
         deleted = self.redis.unlink(*keys_to_delete)  # non-blocking in Redis ≥4
-        logger.info("Trade counters reset – %d keys removed", deleted)
+        logger.info("Hash counters reset – %d keys removed", deleted)
 
         return deleted
+
+    # def _reset_trade_stats(self) -> int:
+    #     """
+    #     Remove every hash inserted by `_update_trade_stats()` **plus** the helper
+    #     index sets.
+
+    #     Returns
+    #     -------
+    #     int
+    #         Total number of Redis keys removed (hashes + index sets).
+    #     """
+    #     # 1️⃣ collect all hash keys via the index sets --------------------------
+    #     INDEX_SETS = (
+    #         TRADES_INDEX_COUNT,
+    #         TRADES_INDEX_AMOUNT,
+    #         TRADES_INDEX_NOTIONAL,
+    #         TRADES_INDEX_FEE,
+    #     )
+
+    #     # Fetch members of every index set in one round-trip
+    #     pipe = self.redis.pipeline()
+    #     for s in INDEX_SETS:
+    #         pipe.smembers(s)
+    #     index_members: list[set[str]] = pipe.execute()
+
+    #     # Flatten to a list of hash-keys; keep only non-empty strings
+    #     hash_keys: list[str] = [
+    #         k for member_set in index_members for k in member_set if k
+    #     ]
+
+    #     # 2️⃣ also purge the index sets themselves ------------------------------
+    #     keys_to_delete = hash_keys + list(INDEX_SETS)
+
+    #     if not keys_to_delete:
+    #         logger.info("Trade counters reset – nothing to delete")
+    #         return 0
+
+    #     deleted = self.redis.unlink(*keys_to_delete)  # non-blocking in Redis ≥4
+    #     logger.info("Trade counters reset – %d keys removed", deleted)
+
+    #     return deleted
+    
+    # def _reset_investment_accounts(self):
+    #     """
+    #     Reset the investment accounts by clearing the portfolio and order book.
+    #     This is used for tests or when starting fresh.
+    #     """
+    #     INDEX_SETS = (
+    #         FUNDS_INDEX,
+    #         WITHDRAW_INDEX,
+    #     )
+
+    #     # Fetch members of every index set in one round-trip
+    #     pipe = self.redis.pipeline()
+    #     for s in INDEX_SETS:
+    #         pipe.smembers(s)
+    #     index_members: list[set[str]] = pipe.execute()
+
+    #     # Flatten to a list of keys; keep only non-empty strings
+    #     keys_to_delete: list[str] = [
+    #         k for member_set in index_members for k in member_set if k
+    #     ]
 
     def reset(self):
         self.portfolio.clear()
@@ -1103,7 +1353,16 @@ class ExchangeEngineActor(_BaseActor):
             t.cancel()
         self._timers.clear()
         self._oid = itertools.count(1)
-        self._reset_trade_stats()
+        INDEX_SETS = (
+            TRADES_INDEX_COUNT,
+            TRADES_INDEX_AMOUNT,
+            TRADES_INDEX_NOTIONAL,
+            TRADES_INDEX_FEE,
+            FUNDS_INDEX,
+            WITHDRAW_INDEX,
+        )
+        # Reset all hash keys in the index sets
+        self._reset_hash_keys(index_set=INDEX_SETS)
 
     # ---------- message handler & lifecycle --------------------------- #
     def on_receive(self, msg):

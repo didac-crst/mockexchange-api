@@ -106,6 +106,9 @@ class FundReq(BaseModel):
     asset: str = "USDT"
     amount: float = Field(100000.0, gt=0)
 
+class WithdrawReq(BaseModel):
+    asset: str = "USDT"
+    amount: float = Field(10000.0, gt=0)
 
 class ModifyTickerReq(BaseModel):
     price: float = Field(..., gt=0)
@@ -307,6 +310,24 @@ def cancel(oid: str):
 
 
 # overview --------------------------------------------------------------- #
+@app.get("/overview/capital", tags=["Overview"])
+def get_summary_capital(
+    aggregation: bool = Query(
+        True, description="Portfolio aggregated capital"
+    )
+):
+    """
+    Get a summary of all capital related amounts in the portfolio.
+    - Current equity in the portfolio (free + used)
+    - Total invested capital.
+    - Total withdrawn funds.
+    - Profit and Loss.
+    """
+    sum_capital = _g(ENGINE.get_summary_capital(aggregation=aggregation))
+    # If aggregation is True, we return a single dict with all assets aggregated
+    # If aggregation is False, we return a dict with each asset's capital separately
+    return sum_capital
+
 @app.get("/overview/assets", tags=["Overview"])
 def get_summary_assets():
     sum_assets_bal = _g(ENGINE.get_summary_assets())
@@ -349,7 +370,6 @@ def patch_ticker_price(ticker: str, body: ModifyTickerReq):
     _g(ENGINE.process_price_tick(ticker))
     return data
 
-
 @app.patch("/admin/balance/{asset}", tags=["Admin"], dependencies=prod_depends)
 def set_balance(asset: str, req: BalanceReq):
     return _g(ENGINE.set_balance(asset, free=req.free, used=req.used))
@@ -359,6 +379,9 @@ def set_balance(asset: str, req: BalanceReq):
 def fund(req: FundReq):
     return _g(ENGINE.fund_asset(req.asset, req.amount))
 
+@app.post("/admin/withdraw", tags=["Admin"], dependencies=prod_depends)
+def withdraw(req: WithdrawReq):
+    return _g(ENGINE.withdraw_asset(req.asset, req.amount))
 
 @app.delete("/admin/data", tags=["Admin"], dependencies=prod_depends)
 def purge_all():
