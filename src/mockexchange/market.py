@@ -8,6 +8,7 @@ from typing import Any, Dict
 import redis
 import time
 
+from ._types import TradingPair
 from .logging_config import logger
 
 @dataclass
@@ -24,6 +25,7 @@ class Market:
     """
 
     conn: redis.Redis
+    root_key: str = "sym_"
 
     # Public API ---------------------------------------------------------
     @property
@@ -33,16 +35,28 @@ class Market:
 
         This is a list of strings, e.g. ``["BTC/USDT", "ETH/USDT"]``.
         """
-        return [k[4:] for k in self.conn.scan_iter("sym_*")]
+        fmt_ticker = lambda k: k[len(self.root_key):] # strip the root key
+        return [fmt_ticker(k) for k in self.conn.scan_iter(f"{self.root_key}*") if k.startswith(self.root_key)]
 
-    def fetch_ticker(self, ticker: str) -> Dict[str, Any] | None:
+    def fetch_ticker(self, ticker: str) -> TradingPair | None:
         """
-        Return a *ccxt-ish* ticker – just the keys our engine needs.
+        Fetch a ticker by its symbol, e.g. "BTC/USDT".
 
-        :raises ValueError: if the hash is missing
-        :raises RuntimeError: if mandatory fields cannot be parsed
+        Returns a `TradingPair` object with the following fields:
+        - `symbol`: The ticker symbol.
+        - `price`: The last price.
+        - `timestamp`: The timestamp of the last price.
+        - `bid`: The current bid price (default to last price if not provided).
+        - `ask`: The current ask price (default to last price if not provided).
+        - `bid_volume`: The volume at the bid price (default to 0.0).
+        - `ask_volume`: The volume at the ask price (default to 0.0).
+
+        If the ticker does not exist, returns `None`.
+
+        :raises ValueError: if the ticker is malformed or missing mandatory fields.
+        :raises RuntimeError: if the ticker cannot be parsed correctly.
         """
-        h = self.conn.hgetall(f"sym_{ticker}")
+        h = self.conn.hgetall(f"{self.root_key}{ticker}")
         if not h:
             return None                            # ticker vanished – treat as absent
         try:
@@ -52,16 +66,19 @@ class Market:
             # Just log once and skip this ticker
             logger.warning("Malformed ticker blob for %s: %s", ticker, h)
             return None
-        return {
-            "symbol": ticker,
-            "last":   price,
-            "timestamp": ts,
-            "bid":  float(h.get("bid", price)),
-            "ask":  float(h.get("ask", price)),
-            "bid_volume": float(h.get("bidVolume", 0.0)),
-            "ask_volume": float(h.get("askVolume", 0.0)),
-            "info": h,
-        }
+        
+        return TradingPair(
+            symbol=ticker,
+            price=price,
+            # Use the current time if timestamp is missing or malformed
+            timestamp=ts if ts else time.time() / 1000,
+            # Default bid/ask to the last price if not provided
+            bid=float(h.get("bid", price)),
+            ask=float(h.get("ask", price)),
+            bid_volume=float(h.get("bidVolume", 0.0)),
+            ask_volume=float(h.get("askVolume", 0.0)),
+            info=h,
+        )
     
     def last_price(self, symbol: str) -> float:
         """
@@ -69,47 +86,32 @@ class Market:
 
         :raises RuntimeError: if the ticker is not available
         """
-        ticker = self.fetch_ticker(symbol)
-        if ticker is None:
+        requested_TradingPair = self.fetch_ticker(symbol)
+        if requested_TradingPair is None:
             raise RuntimeError(f"Ticker for {symbol} not available")
-        return ticker["last"]
-    
-    def set_last_price(self, symbol: str, price: float, ts: float | None = None, bid: float | None = None, ask: float | None = None,
-                       bid_volume: float | None = None, ask_volume: float | None = None) -> None:
+        return requested_TradingPair.price
+
+    def set_last_price(self, TradingPair: TradingPair) -> None:
         """
         Set the last price of the ticker.
 
-        :param symbol: The ticker symbol, e.g. "BTC/USDT".
-        :param price: The last price to set.
-        :param ts: Optional timestamp in seconds since epoch; if not provided, current time is used.
-        :param bid: Optional bid price; if not provided, it will be set to the same value as `price`.
-        :param ask: Optional ask price; if not provided, it will be set to the same value as `price`.
-        :param bid_volume: Optional bid volume; if not provided, it defaults to 0.0.
-        :param ask_volume: Optional ask volume; if not provided, it defaults to 0.0.
-
-        This method is only for testing purposes and should not be used in production.
+        :param TradingPair: The TradingPair object containing the ticker data.
+        :raises RuntimeError: if the ticker cannot be set.
         """
-        if ts is None:
-            ts = time.time() / 1000  # current time in seconds since epoch
-        if bid is None:
-            bid = price
-        if ask is None:
-            ask = price
-        if bid_volume is None:
-            bid_volume = 0.0
-        if ask_volume is None:
-            ask_volume = 0.0
+        if not TradingPair.symbol:
+            raise RuntimeError("TradingPair must have a symbol")
+        
         fields = {
-            "symbol": symbol,
-            "price": price,
-            "timestamp": ts,
-            "bid": bid,
-            "ask": ask,
-            "bidVolume": bid_volume,
-            "askVolume": ask_volume,
+            "symbol": TradingPair.symbol,
+            "price": TradingPair.price,
+            "timestamp": TradingPair.timestamp,
+            "bid": TradingPair.bid,
+            "ask": TradingPair.ask,
+            "bidVolume": TradingPair.bid_volume,
+            "askVolume": TradingPair.ask_volume,
         }
 
         # Redis won’t store None, so drop them first.
         clean = {k: v for k, v in fields.items() if v is not None}
 
-        self.conn.hset(f"sym_{symbol}", mapping=clean)
+        self.conn.hset(f"{self.root_key}{TradingPair.symbol}", mapping=clean)
