@@ -12,10 +12,10 @@ def reset(client: Client) -> None:
     client.delete("/admin/data").raise_for_status()
 
 
-def fund(client: Client, asset: str, amount: float = 100_000) -> None:
-    """Fund the backend with a specified amount of an asset."""
+def deposit(client: Client, asset: str, amount: float = 100_000) -> None:
+    """Deposit a specified amount of an asset into the backend."""
     client.post(
-        "/admin/fund", json={"asset": asset, "amount": amount}
+        f"/balance/{asset}/deposit", json={"amount": amount}
     ).raise_for_status()
 
 
@@ -28,7 +28,7 @@ def edit_balance(client: Client, asset: str, free: float, used: float) -> None:
 def reset_and_fund(client: Client, asset: str, amount: float = 100_000) -> None:
     """Reset the backend and fund the asset with a specified amount."""
     reset(client)
-    fund(client, asset, amount)
+    deposit(client, asset, amount)
 
 
 def get_tickers(client: Client) -> List[Dict[str, Any]]:
@@ -38,12 +38,12 @@ def get_tickers(client: Client) -> List[Dict[str, Any]]:
     return resp.json()
 
 
-def get_last_prices(client: Client, tickers: list[str]) -> dict[str, float]:
+def get_ticker_price(client: Client, tickers: list[str]) -> dict[str, float]:
     """Get the last price of a ticker."""
     symbols_to_retrieve = ",".join(tickers)
     resp = client.get(f"/tickers/{symbols_to_retrieve}")
     resp.raise_for_status()
-    return {symbol: data["last"] for symbol, data in resp.json().items()}
+    return {symbol: data["price"] for symbol, data in resp.json().items()}
 
 
 def patch_ticker_price(client: Client, symbol: str, price: float) -> None:

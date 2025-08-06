@@ -16,7 +16,7 @@ from helpers import (
     reset_and_fund,
     get_tickers,
     place_order,
-    get_last_prices,
+    get_ticker_price,
     get_overview_balances,
 )
 
@@ -147,7 +147,7 @@ def main() -> None:
             print(f"Cash ratio: {ratio_cash_equity:.2%} | Sides: {sides}")
             n_orders = random.randint(MIN_ORDERS_PER_BATCH, max_orders_per_batch)
             batch = random.sample(tickers, n_orders)
-            last_prices = get_last_prices(client, batch)
+            last_prices = get_ticker_price(client, batch)
 
             for symbol in batch:
                 asset = symbol.split("/")[0]
