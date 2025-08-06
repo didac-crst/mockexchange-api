@@ -1,33 +1,61 @@
-# cli.py  ── HTTP façade over the FastAPI service
+# cli.py  ── thin HTTP wrapper around the FastAPI service
 from __future__ import annotations
+
+"""Command-line helper for *MockExchange*.
+
+Adds coverage for all current API endpoints (August 2025).
+
+Usage examples
+--------------
+
+```bash
+# List all symbols
+mockx tickers
+
+# Show one ticker
+mockx ticker BTC/USDT
+
+# Deposit 10 000 USDT
+mockx deposit USDT 10000
+
+# Withdraw some BTC
+mockx withdraw BTC 0.25
+
+# Place a limit order
+mockx order BTC/USDT buy 0.01 --type limit --price 28000
+
+# Portfolio summaries
+mockx overview-capital          # aggregated P&L
+mockx overview-assets           # cash + frozen breakdown
+mockx overview-trades --side buy --assets BTC,ETH
+```
+"""
 
 import argparse
 import json
 import os
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-import httpx   # pip install httpx
+import httpx  # pip install httpx
 
-# ────────────────────────────── Config ─────────────────────────────── #
-API_URL = os.getenv("API_URL", "http://localhost:8000")
-API_KEY = os.getenv("API_KEY", "invalid-key")
-TIMEOUT = float(os.getenv("API_TIMEOUT_SEC", "10"))
-
-HEADERS = {"x-api-key": API_KEY}  # added to every request
+# ────────────────────────────── Config ──────────────────────────────── #
+API_URL   = os.getenv("API_URL", "http://localhost:8000")
+API_KEY   = os.getenv("API_KEY", "invalid-key")
+TIMEOUT   = float(os.getenv("API_TIMEOUT_SEC", "10"))
+HEADERS   = {"x-api-key": API_KEY}
 
 client = httpx.Client(base_url=API_URL, headers=HEADERS, timeout=TIMEOUT)
 
+# ───────────────────────────── Helpers ──────────────────────────────── #
 
-# ───────────────────────────── Helpers ─────────────────────────────── #
 def _get(path: str, **params):
-    # drop keys whose value is None to avoid sending e.g. status=&tail=
     r = client.get(path, params={k: v for k, v in params.items() if v is not None})
     _raise_for_status(r)
     return r.json()
 
 
-def _post(path: str, payload: Dict[str, Any] | None = None):
+def _post(path: str, payload: Optional[Dict[str, Any]] = None):
     r = client.post(path, json=payload or {})
     _raise_for_status(r)
     return r.json()
@@ -48,58 +76,77 @@ def _delete(path: str):
 def _raise_for_status(r: httpx.Response) -> None:
     if r.is_success:
         return
-    # Bubble up FastAPI details if JSON, otherwise raw text
     try:
         detail = r.json().get("detail", r.text)
-    except ValueError:           # body not JSON (or empty)
+    except ValueError:
         detail = r.text or r.reason_phrase
     sys.exit(f"HTTP {r.status_code}: {detail}")
 
 
-def pp(obj):
+def pp(obj: Any):
     print(json.dumps(obj, indent=2, sort_keys=True))
 
+# ───────────────────────────── argparse ─────────────────────────────── #
 
-# ───────────────────────────── Commands ────────────────────────────── #
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser("mockx")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("balance")
+    # --- market ------------------------------------------------------ #
+    sub.add_parser("tickers")  # list all
+    tk = sub.add_parser("ticker")
+    tk.add_argument("symbol", help="BTC/USDT or A,B,C list")
 
-    t = sub.add_parser("ticker")
-    t.add_argument("symbol", help="BTC/USDT or comma‑separated list")
+    # --- portfolio --------------------------------------------------- #
+    sub.add_parser("balance")                 # full snapshot
+    bl = sub.add_parser("balance-asset")      # one row
+    bl.add_argument("asset")
+    sub.add_parser("balance-list")            # just names
 
-    o = sub.add_parser("order") # set_order
-    o.add_argument("symbol")
-    o.add_argument("side", choices=["buy", "sell"])
-    o.add_argument("amount", type=float)
-    o.add_argument("--type", choices=["market", "limit"], default="market")
-    o.add_argument("--price", type=float, dest="limit_price")  # keep param names aligned
+    dep = sub.add_parser("deposit")           # POST /balance/{asset}/deposit
+    dep.add_argument("asset")
+    dep.add_argument("amount", type=float)
 
-    c = sub.add_parser("cancel") # cancel_order
-    c.add_argument("order_id", help="ID returned by /orders")
+    wd = sub.add_parser("withdraw")           # POST /balance/{asset}/withdrawal
+    wd.add_argument("asset")
+    wd.add_argument("amount", type=float)
 
-    d = sub.add_parser("orders") # get_orders - what about if no params provided?
-    d.add_argument("--status", choices=["open", "closed", "canceled"])
-    d.add_argument("--symbol")
-    d.add_argument("--side", choices=["buy", "sell"])
-    d.add_argument("--tail", type=int)
-
-    # --- admin shortcuts (optional) ----------------------------------- #
-    admin = sub.add_parser("fund")
-    admin.add_argument("asset")
-    admin.add_argument("amount", type=float)
-
-    sub.add_parser("order-get").add_argument("order_id")
-    # lean 'orders-simple' for the /list variant
-    sub.add_parser("orders-simple")
+    # --- orders ------------------------------------------------------ #
+    ordp = sub.add_parser("order")
+    ordp.add_argument("symbol")
+    ordp.add_argument("side", choices=["buy", "sell"])
+    ordp.add_argument("amount", type=float)
+    ordp.add_argument("--type", choices=["market", "limit"], default="market")
+    ordp.add_argument("--price", type=float, dest="limit_price")
 
     can = sub.add_parser("can-exec")
-    for arg in ("symbol", "side", "amount"):
-        can.add_argument(arg)
+    for a in ("symbol", "side", "amount"):
+        can.add_argument(a)
     can.add_argument("--price", type=float)
 
+    sub.add_parser("orders")                  # verbose list (filters via flags)
+    ol = sub.add_parser("orders-simple")      # just ids
+    for a in ("status", "symbol", "side"):
+        ol.add_argument(f"--{a}")
+    ol.add_argument("--tail", type=int)
+
+    og = sub.add_parser("order-get")
+    og.add_argument("order_id")
+
+    oc = sub.add_parser("cancel")
+    oc.add_argument("order_id")
+
+    # --- overview ---------------------------------------------------- #
+    sub.add_parser("overview-capital").add_argument("--raw", action="store_true",
+                                                    help="return unaggregated data")
+    sub.add_parser("overview-assets")
+
+    ot = sub.add_parser("overview-trades")
+    ot.add_argument("--side", choices=["buy", "sell"])
+    ot.add_argument("--assets",
+                    help="Comma-separated base symbols, e.g. BTC,ETH")
+
+    # --- admin helpers ---------------------------------------------- #
     sb = sub.add_parser("set-balance")
     sb.add_argument("asset")
     sb.add_argument("--free", type=float, required=True)
@@ -114,15 +161,33 @@ def main() -> None:
     sub.add_parser("reset-data")
     sub.add_parser("health")
 
-    args = p.parse_args()
+    return p
+
+# ───────────────────────────── dispatch ────────────────────────────── #
+
+def main():  # noqa: C901 – big matcher is fine here
+    args = build_parser().parse_args()
 
     match args.cmd:
-        case "balance":
-            pp(_get("/balance"))
-
+        # Market -------------------------------------------------------
+        case "tickers":
+            pp(_get("/tickers"))
         case "ticker":
             pp(_get(f"/tickers/{args.symbol}"))
 
+        # Portfolio ----------------------------------------------------
+        case "balance":
+            pp(_get("/balance"))
+        case "balance-asset":
+            pp(_get(f"/balance/{args.asset}"))
+        case "balance-list":
+            pp(_get("/balance/list"))
+        case "deposit":
+            pp(_post(f"/balance/{args.asset}/deposit", {"amount": args.amount}))
+        case "withdraw":
+            pp(_post(f"/balance/{args.asset}/withdrawal", {"amount": args.amount}))
+
+        # Orders -------------------------------------------------------
         case "order":
             body = {
                 "symbol": args.symbol,
@@ -132,41 +197,35 @@ def main() -> None:
                 "limit_price": args.limit_price,
             }
             pp(_post("/orders", body))
-
         case "cancel":
             pp(_post(f"/orders/{args.order_id}/cancel"))
-
         case "orders":
-            pp(_get("/orders", status=args.status, symbol=args.symbol,
+            pp(_get("/orders"))
+        case "orders-simple":
+            pp(_get("/orders/list", status=args.status, symbol=args.symbol,
                     side=args.side, tail=args.tail))
-
-        case "fund":                       # convenience wrapper - should also be admin_fund?
-            pp(_post("/admin/fund", {"asset": args.asset, "amount": args.amount}))
-
-        # ---- read one order -----------------------------------------
         case "order-get":
             pp(_get(f"/orders/{args.order_id}"))
-
-        # ---- list simple --------------------------------------------
-        case "orders-simple":
-            pp(_get("/orders/list"))
-
-        # ---- dry‑run -------------------------------------------------
         case "can-exec":
             body = {
                 "symbol": args.symbol,
                 "side": args.side,
                 "amount": float(args.amount),
-                "limit_price": args.price,
-                "type": "limit" if args.price else "market",
+                "price": args.price,
             }
             pp(_post("/orders/can_execute", body))
 
-        # ---- admin helpers ------------------------------------------
-        case "set-balance":
-            pp(_patch(f"/admin/balance/{args.asset}",
-                      {"free": args.free, "used": args.used}))
+        # Overview -----------------------------------------------------
+        case "overview-capital":
+            pp(_get("/overview/capital", aggregation=not args.raw))
+        case "overview-assets":
+            pp(_get("/overview/assets"))
+        case "overview-trades":
+            pp(_get("/overview/trades", side=args.side, assets=args.assets))
 
+        # Admin --------------------------------------------------------
+        case "set-balance":
+            pp(_patch(f"/admin/balance/{args.asset}", {"free": args.free, "used": args.used}))
         case "set-price":
             payload = {
                 "price": args.price,
@@ -174,15 +233,12 @@ def main() -> None:
                 "ask_volume": args.ask_volume,
             }
             pp(_patch(f"/admin/tickers/{args.symbol}/price", payload))
-
         case "reset-data":
             pp(_delete("/admin/data"))
-
         case "health":
             pp(_get("/admin/health"))
-
         case _:
-            p.error("unknown command")
+            sys.exit("Unknown command – check --help")
 
 
 if __name__ == "__main__":
