@@ -1,5 +1,5 @@
 """
-tests/test_06A_fund_and_full_rejected_insufficient_trade_when_buy.py
+tests/test_06B_fund_and_partial_rejected_insufficient_trade_when_buy.py
 ======================================
 
 End-to-end check for **reservation roll-back** when the account balance is
@@ -7,7 +7,7 @@ manually corrupted *after* an order has been accepted but *before* it can be
 filled.
 
 Use case:
-* full_reject        – 0 BTC filled → status == rejected
+* partial_reject     – some BTC filled → status == partially_rejected
 
 Why this test exists
 --------------------
@@ -37,16 +37,15 @@ import time
 import pytest
 
 from .helpers import (
-    reset_and_fund,
-    get_last_price,
+    reset_and_deposit,
 )
 
 QUOTE = "USDT"
 ASSET = "BTC"
 SYMBOL = f"{ASSET}/{QUOTE}"
-LIMIT_PX = 2.0                # 1 BTC ≙ 2 USDT
-NOTIONAL_TO_BUY = 10_000.0    # 10 k USDT
-FUNDING = NOTIONAL_TO_BUY * 2 # leave plenty of head-room
+LIMIT_PX = 2.0  # 1 BTC ≙ 2 USDT
+NOTIONAL_TO_BUY = 10_000.0  # 10 k USDT
+FUNDING = NOTIONAL_TO_BUY * 2  # leave plenty of head-room
 
 
 # --------------------------------------------------------------------- #
@@ -63,7 +62,7 @@ def test_insufficient_funds_rejection(client):
     # --------------------------------------------------------------------- #
     # 1️⃣  Preparation – fund the quote currency
     # --------------------------------------------------------------------- #
-    reset_and_fund(client, QUOTE, FUNDING)
+    reset_and_deposit(client, QUOTE, FUNDING)
 
     # sanity-check funding
     assert client.get(f"/balance/{QUOTE}").json()["free"] == FUNDING
@@ -74,18 +73,18 @@ def test_insufficient_funds_rejection(client):
     qty_btc = NOTIONAL_TO_BUY / LIMIT_PX
     order_req = {
         "symbol": SYMBOL,
-        "side":   "buy",
-        "type":   "limit",
+        "side": "buy",
+        "type": "limit",
         "amount": qty_btc,
         "limit_price": LIMIT_PX,
     }
     order = client.post("/orders", json=order_req).json()
     assert order["status"] == "new"
-    fee   = order["initial_booked_fee"]
-    booked = NOTIONAL_TO_BUY + fee                       # USDT locked
+    fee = order["initial_booked_fee"]
+    booked = NOTIONAL_TO_BUY + fee  # USDT locked
 
     # --------------------------------------------------------------------- #
-    # 3️⃣  Tamper with the balance – simulate disappearing funds
+    # 3️⃣A  Tamper with the balance – simulate disappearing funds
     # --------------------------------------------------------------------- #
     # Drop 10 % of the fee ⇒ insufficient on next fill attempt
     new_used = booked - fee * 0.1
@@ -97,25 +96,41 @@ def test_insufficient_funds_rejection(client):
     tampered = tamper_resp.json()  # keep for final assertions
 
     # --------------------------------------------------------------------- #
+    # 3️⃣B  Create a *tiny* partial fill first
+    # --------------------------------------------------------------------- #
+    # Pump in a fake volume so only ~5 % of order can fill.
+    # That leaves the rest still “open”.
+    client.patch(
+        f"/admin/tickers/{SYMBOL}/price",
+        json={
+            "price": LIMIT_PX,  # crosses immediately
+            "ask_volume": qty_btc * 0.05,
+            "bid_volume": qty_btc * 0.05,
+        },
+    )
+    # Give the engine a moment (tick loop) to settle
+    time.sleep(0.1)
+
+    # --------------------------------------------------------------------- #
     # 4️⃣  Move the market to the limit price → engine tries to fill
     # --------------------------------------------------------------------- #
     client.patch(
         f"/admin/tickers/{SYMBOL}/price",
-        json={"price": LIMIT_PX},   # same price, triggers settle
+        json={"price": LIMIT_PX},  # same price, triggers settle
     )
-    time.sleep(0.1)                # allow async settle
+    time.sleep(0.1)  # allow async settle
 
     # --------------------------------------------------------------------- #
-    # 5️⃣  Order must be rejected 
+    # 5️⃣  Order must be rejected
     # --------------------------------------------------------------------- #
     order_after = client.get(f"/orders/{order['id']}").json()
     assert order_after["status"] in {"rejected", "partially_rejected"}
 
     balances = client.get("/balance").json()
     # Only USDT should exist in the portfolio
-    assert list(balances.keys()) == [QUOTE]
+    assert sorted(list(balances.keys())) == sorted([QUOTE, ASSET])
 
     # Locked USDT is back in `free`; nothing remains in `used`
-    assert balances[QUOTE]["free"] == tampered["used"]
+    assert balances[QUOTE]["free"] < tampered["used"]
     assert balances[QUOTE]["used"] == 0.0
-    assert balances[QUOTE]["total"] == tampered["free"] + tampered["used"]
+    assert balances[QUOTE]["total"] < tampered["free"] + tampered["used"]

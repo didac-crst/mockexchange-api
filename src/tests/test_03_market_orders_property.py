@@ -39,10 +39,9 @@ from math import isclose
 
 from .helpers import (
     assert_no_locked_funds,
-    get_last_price,
+    get_ticker_price,
     get_tickers,
     place_order,
-    reset_and_fund,
 )
 from hypothesis import HealthCheck, assume, given, settings, strategies as st
 
@@ -156,7 +155,7 @@ def test_market_order_flow_property(
     # ------------------------------------------------------------------
     for side in sides:
         for symbol in tickers:
-            price = get_last_price(funded_client, symbol)
+            price = get_ticker_price(funded_client, symbol)
             qty = notion_per_trade * amount_factor / price
             if side == "sell":
                 qty *= 0.9  # leave a safety-margin to stay liquid

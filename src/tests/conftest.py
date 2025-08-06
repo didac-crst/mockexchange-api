@@ -3,7 +3,7 @@
 from __future__ import annotations
 import os, pytest, httpx
 from dotenv import load_dotenv
-from .helpers import reset_and_fund
+from .helpers import reset_and_deposit
 
 load_dotenv()  # load .env → os.environ
 
@@ -22,5 +22,5 @@ def client():
 def funded_client(client, quote: str = "USDT", amount: float = 100_000.0):
     """Session-wide HTTP client that is reset and funded with USDT."""
     # Reset the backend and fund it with USDT
-    reset_and_fund(client, quote, amount)
+    reset_and_deposit(client, quote, amount)
     return client

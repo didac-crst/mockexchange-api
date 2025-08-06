@@ -25,10 +25,10 @@ import random
 from typing import Final
 
 from .helpers import (
-    reset_and_fund,
+    reset_and_deposit,
     place_order,
     get_tickers,
-    get_last_price,
+    get_ticker_price,
 )
 
 # --------------------------------------------------------------------------- #
@@ -101,7 +101,7 @@ def test_normal_example(client):
     """
 
     # ── 1) Clean slate + funding ─────────────────────────────────────── #
-    reset_and_fund(client, QUOTE, FUNDING_AMOUNT)
+    reset_and_deposit(client, QUOTE, FUNDING_AMOUNT)
 
     expected_balance = {
         "asset": QUOTE,
@@ -125,7 +125,7 @@ def test_normal_example(client):
 
     for symbol in tickers_to_trade:
         # price = client.get(f"/tickers/{symbol}").json()[symbol]["last"]
-        price = get_last_price(client, symbol)
+        price = get_ticker_price(client, symbol)
 
         # Randomise a bit so identical seeds don’t always trade the same size
         notion = notion_per_asset * random.uniform(0.5, 4.0)
@@ -138,7 +138,7 @@ def test_normal_example(client):
         t_type = random.choice(TRADING_TYPES)
         if t_type == "limit":
             limit_price = (
-                get_last_price(client, symbol) * 0.9995
+                get_ticker_price(client, symbol) * 0.9995
             )  # slightly below market
         else:
             limit_price = None

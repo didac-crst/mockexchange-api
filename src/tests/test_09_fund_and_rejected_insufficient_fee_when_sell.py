@@ -1,38 +1,42 @@
 """
-tests/test_06B_fund_and_rejected_insufficient_trade_when_sell.py
-==============================================================
+tests/test_06C_fund_and_rejected_insufficient_fee_when_sell.py
+============================================================
 
-Twin-scenario of *test 06A* – this time for the **SELL** side.
+Variant of *test 06A* that targets **SELL‑side fee shortages**.
 
-Rationale
-~~~~~~~~~
-* When a **SELL** order is accepted the engine books
+Motivation
+----------
+* When a **SELL** order is accepted, the engine immediately reserves
+  • **base** (BTC amount) in ``used``
+  • **quote** (trading fee = amount × price × commission) in ``used``.
+* If, *before* the match happens, the reserved **fee** balance is reduced
+  (bug, manual intervention, concurrent withdrawal …) the order **must
+  not** execute.
+  The engine has to *reject* (or *partially reject*) the order and roll
+  back **all** reservations.
 
-    • *base*  : the BTC amount in `used`
-    • *quote* : the fee (= amount × price × commission) in `used`
+Test flow
+---------
+1. **Reset & fund** both BTC (to sell) *and* USDT (to pre‑pay the fee).
+2. **Submit** a SELL‑limit order – engine locks BTC + fee.
+3. **Tamper**: steal part of the *fee* (USDT) from the ``used`` bucket.
+4. **Tick** the market to the limit price (would normally trigger a fill).
+5. **Assert** the order ends up *rejected / partially_rejected* and that
+   every reservation is released (``used`` columns are zero).
 
-* If – before the order is matched – somebody tinkers with the balances and
-  lowers either reservation, the trade **must not** go through.
-  The engine has to **reject** (or partially reject) the order and roll back
-  whatever it had reserved.
-
-Test outline
-------------
-1. **Reset & fund** both BTC (to sell) *and* USDT (to pay the fee).
-2. **Create** a SELL-limit order – the engine reserves BTC + fee.
-3. **Tamper** with the BTC balance so that *used &lt; reserved*.
-4. **Tick** the market price to the limit price (simulating a match).
-5. **Assert** the order is *rejected / partially_rejected* and every
-   reservation is released.
-
-A failure means the “pre–execution funds check” is broken for sell orders.
+A failure indicates the pre‑execution funds‑check for sell‑side fees is
+broken.
 """
 
 # --------------------------------------------------------------------------- #
 # Imports & helpers
 # --------------------------------------------------------------------------- #
 from xmlrpc import client
-from .helpers import reset_and_fund  # deletes state & funds ONE asset
+from .helpers import (
+    reset_and_deposit,
+    deposit,
+    get_ticker_price,
+)
 from math import isclose
 
 # --------------------------------------------------------------------------- #
@@ -49,7 +53,7 @@ COMMISSION = 0.001  # matches default in env (0.1 %)
 # --------------------------------------------------------------------------- #
 # Test case
 # --------------------------------------------------------------------------- #
-def test_sell_order_rejects_when_base_is_missing(client):
+def test_sell_order_rejects_when_fee_is_missing(client):
     """
     Full *happy‑path* description of what happens in this test:
 
@@ -68,8 +72,7 @@ def test_sell_order_rejects_when_base_is_missing(client):
        their respective `used` buckets.
 
     4. **Tampering**
-       We secretly reduce the “used” BTC so that there are not enough coins
-       left for the order to execute.
+      The test secretly steals part of the *fee* (USDT) from the ``used`` bucket.
 
     5. **Trigger**
        The ticker is moved up to the limit price which would normally cause the
@@ -82,10 +85,7 @@ def test_sell_order_rejects_when_base_is_missing(client):
     """
 
     # --- Step 0: Ask the exchange for the current market price so we can define a "high" limit price.
-    resp = client.get(f"/tickers/{SYMBOL}")
-    assert resp.status_code == 200
-    ticker_info = resp.json()[SYMBOL]
-    market_price = ticker_info["last"] if ticker_info else 0
+    market_price = get_ticker_price(client, SYMBOL)
     assert market_price > 0, "Market price must be greater than zero"
     # Choose a limit price = 2×market.  With such a generous price the order
     # would definitely match *if* funds were available.
@@ -98,15 +98,9 @@ def test_sell_order_rejects_when_base_is_missing(client):
 
     # --- Step 1: Reset the exchange state and fund the assets ---
     # --- Reset state and credit the selling BTC ---
-    reset_and_fund(client, ASSET, AMOUNT_BTC)  # wipes → add BTC
+    reset_and_deposit(client, ASSET, AMOUNT_BTC)  # wipes → add BTC
     # --- Credit USDT so the engine can also reserve the taker fee ---
-    client.post(
-        "/admin/fund",
-        json={  # add USDT for the fee
-            "asset": QUOTE,
-            "amount": fund_usdt,
-        },
-    )
+    deposit(client, QUOTE, fund_usdt)
 
     # Expectation after the funding phase.
     # Portfolio must now contain both assets
@@ -138,12 +132,12 @@ def test_sell_order_rejects_when_base_is_missing(client):
     assert bals_after[ASSET]["used"] == AMOUNT_BTC
     assert bals_after[QUOTE]["used"] == reserved_fee
 
-    # --- Step 3: simulate an external process stealing a slice of the reserved BTC ---
-    # Tamper: make *used BTC* smaller than what the order needs
-    tampered_used_btc = AMOUNT_BTC * 0.99  # 99% of the amount we wanted to sell
+    # --- Step 3: simulate an external process stealing a slice of the reserved *fee* ---
+    # Tamper: reduce the USDT fee that had been locked
+    tampered_used_usdt = reserved_fee * 0.95  # 95% of the reserved fee
     client.patch(
-        f"/admin/balance/{ASSET}",
-        json={"free": 0.0, "used": tampered_used_btc},
+        f"/admin/balance/{QUOTE}",
+        json={"free": 0.0, "used": tampered_used_usdt},
     )
 
     # --- Step 4: move the market so the order *would* execute ---
@@ -158,9 +152,9 @@ def test_sell_order_rejects_when_base_is_missing(client):
 
     assert bals_final[ASSET]["used"] == 0.0
     assert bals_final[QUOTE]["used"] == 0.0  # fee reservation released
-    # The BTC that *had* been in used flows back to free
+    # The full BTC amount should now be back in *free* because the order was not executed
     assert isclose(
         bals_final[ASSET]["free"],
-        tampered_used_btc,
+        AMOUNT_BTC,
         rel_tol=1e-9,
     )

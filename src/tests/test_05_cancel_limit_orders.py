@@ -25,10 +25,10 @@ import random
 from .helpers import (
     assert_no_locked_funds,
     cancel_order,
-    fund,
+    deposit,
     get_tickers,
     place_order,
-    reset_and_fund,
+    reset_and_deposit,
 )
 
 # Engine state buckets we expect to see
@@ -70,7 +70,7 @@ def test_cancel_orders(client):
     # ------------------------------------------------------------------ #
     initial_asset = "USDT"
     initial_amount = 100_000.0
-    reset_and_fund(client, initial_asset, initial_amount)
+    reset_and_deposit(client, initial_asset, initial_amount)
 
     assert client.get(f"/balance/{initial_asset}").json() == {
         "asset": initial_asset,
@@ -88,7 +88,7 @@ def test_cancel_orders(client):
     #   fee.  We therefore credit each base asset with plenty of units.
     for ticker in tickers:
         base_asset = ticker.split("/")[0]
-        fund(client, base_asset, initial_amount)
+        deposit(client, base_asset, initial_amount)
 
     # ------------------------------------------------------------------ #
     # 3) Submit the intentionally unfillable limit orders
