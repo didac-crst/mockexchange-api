@@ -1337,7 +1337,7 @@ class ExchangeEngineActor(_BaseActor):
             TradingPair(
                 symbol=symbol,
                 price=price,
-                ts=ts,
+                timestamp=ts,
                 bid=price,
                 ask=price,
                 bid_volume=bid_volume,
@@ -1346,7 +1346,7 @@ class ExchangeEngineActor(_BaseActor):
         ).get()  # we still wait here to ensure the write has finished
 
         # 2️⃣ read the now‑current ticker snapshot and hand it back
-        return self.market.fetch_ticker(symbol).to_dict().get()
+        return self.market.fetch_ticker(symbol).get().to_dict()
     
 
     # ------------- reset helpers -------------------------------------------- #
