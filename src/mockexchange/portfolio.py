@@ -29,8 +29,12 @@ class Portfolio:
     # Public API ---------------------------------------------------------
     def get(self, asset: str) -> AssetBalance:
         """Return balance or a zeroed placeholder if none exists."""
-        blob = self.conn.hget(self.key, asset)
-        return self._load(blob) if blob else AssetBalance(asset)
+        try:
+            asset = asset.upper()
+            blob = self.conn.hget(self.key, asset)
+            return self._load(blob) if blob else AssetBalance(asset)
+        except redis.RedisError as e:
+            raise RuntimeError(f"Failed to get balance for {asset}: {e}")
 
     def set(self, bal: AssetBalance) -> None:
         """Insert / overwrite a balance atomically (`HSET`)."""

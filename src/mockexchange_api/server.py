@@ -32,6 +32,8 @@ Portfolio
 GET  **/balance**                      → full account snapshot
 GET  **/balance/list**                 → list of all assets with balances
 GET  **/balance/{asset}**              → asset row only (``free``, ``used``)
+POST **/balance/{asset}/deposit**      → deposit asset (e.g. ``USDT``)
+POST **/balance/{asset}/withdrawal**   → withdraw asset (e.g. ``USDT``)
 
 Orders
 ~~~~~~
@@ -42,13 +44,18 @@ POST **/orders**                       → create *market* | *limit* order
 POST **/orders/can_execute**           → dry-run balance check
 POST **/orders/{oid}/cancel**          → cancel *open* order
 
+Overview
+~~~~~~~~~~~
+GET  **/overview/capital**             → portfolio capital summary
+GET  **/overview/assets**              → portfolio assets summary
+GET  **/overview/trades**              → trade statistics (by asset, side)
+
 Admin
 ~~~~~
 PATCH **/admin/tickers/{ticker}/price** → set ticker price and volumes
-PATCH **/admin/edit_balance**           → overwrite or add a balance row
-PATCH **/admin/fund**                   → credit an asset’s *free* column
+PATCH **/admin/balance/{asset}**        → set asset balance (free, used)
 DELETE **/admin/data**                  → wipe balances **and** orders
-GET **/admin/health**                  → check service health
+GET **/admin/health**                   → check service health
 
 Implementation notes
 --------------------
@@ -87,6 +94,7 @@ _ALL_STATUS = Literal[*ALL_STATUS_STR]  # type alias for all order statuses
 _TRADING_SIDES = Literal[*ALL_SIDES_STR]  # type alias for all trading sides
 _ORDER_TYPES = Literal[*ALL_TYPES_STR]  # type alias for all order types
 
+CASH_ASSET = os.getenv("CASH_ASSET", "USDT")  # default cash asset
 
 # ─────────────────────────── Pydantic models ────────────────────────── #
 class OrderReq(BaseModel):
@@ -103,9 +111,7 @@ class BalanceReq(BaseModel):
 
 
 class FundReq(BaseModel):
-    asset: str = "USDT"
     amount: float = Field(100000.0, gt=0)
-
 
 class ModifyTickerReq(BaseModel):
     price: float = Field(..., gt=0)
@@ -214,13 +220,29 @@ def balance():
 
 @app.get("/balance/list", tags=["Portfolio"])
 def balance_list():
-    return _g(ENGINE.fetch_balance_list())
+    asset_owned_list = _g(ENGINE.fetch_balance_list())
+    return {"length": len(asset_owned_list), "assets": asset_owned_list}
 
 
 @app.get("/balance/{asset}", tags=["Portfolio"])
 def asset_balance(asset: str):
     return _g(ENGINE.fetch_balance(asset))
 
+@app.post("/balance/{asset}/deposit", tags=["Portfolio"], dependencies=prod_depends)
+def deposit_asset(req: FundReq, asset: str = CASH_ASSET):
+    try:
+        return _g(ENGINE.deposit_asset(asset, req.amount))
+    except ValueError as e:
+        # Turn any ValueError into a 400 Bad Request
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/balance/{asset}/withdrawal", tags=["Portfolio"], dependencies=prod_depends)
+def withdraw_asset(req: FundReq, asset: str = CASH_ASSET):
+    try:
+        return _g(ENGINE.withdrawal_asset(asset, req.amount))
+    except ValueError as e:
+        # Turn any ValueError into a 400 Bad Request
+        raise HTTPException(status_code=400, detail=str(e))
 
 # orders ----------------------------------------------------------------- #
 @app.get("/orders", tags=["Orders"])
@@ -307,6 +329,24 @@ def cancel(oid: str):
 
 
 # overview --------------------------------------------------------------- #
+@app.get("/overview/capital", tags=["Overview"])
+def get_summary_capital(
+    aggregation: bool = Query(
+        True, description="Portfolio aggregated capital"
+    )
+):
+    """
+    Get a summary of all capital related amounts in the portfolio.
+    - Current equity in the portfolio (free + used)
+    - Total invested capital.
+    - Total withdrawn funds.
+    - Profit and Loss.
+    """
+    sum_capital = _g(ENGINE.get_summary_capital(aggregation=aggregation))
+    # If aggregation is True, we return a single dict with all assets aggregated
+    # If aggregation is False, we return a dict with each asset's capital separately
+    return sum_capital
+
 @app.get("/overview/assets", tags=["Overview"])
 def get_summary_assets():
     sum_assets_bal = _g(ENGINE.get_summary_assets())
@@ -329,36 +369,29 @@ def get_summary_trades(
     "/admin/tickers/{ticker:path}/price", tags=["Admin"], dependencies=prod_depends
 )
 def patch_ticker_price(ticker: str, body: ModifyTickerReq):
-    ts = time.time()
-    price = body.price
-    bid = ask = price
-    dummy_notion = 10**12  # just a large number to ensure liquid volumes
-    body.bid_volume = body.bid_volume or dummy_notion / bid
-    body.ask_volume = body.ask_volume or dummy_notion / ask
     data = _g(
         ENGINE.set_ticker(
-            ticker,
-            price,
-            ts,
-            bid,
-            ask,
-            body.bid_volume,
-            body.ask_volume,
+            symbol=ticker,
+            price=body.price,
+            bid_volume=body.bid_volume,
+            ask_volume=body.ask_volume
         )
     )
     _g(ENGINE.process_price_tick(ticker))
     return data
-
 
 @app.patch("/admin/balance/{asset}", tags=["Admin"], dependencies=prod_depends)
 def set_balance(asset: str, req: BalanceReq):
     return _g(ENGINE.set_balance(asset, free=req.free, used=req.used))
 
 
-@app.post("/admin/fund", tags=["Admin"], dependencies=prod_depends)
-def fund(req: FundReq):
-    return _g(ENGINE.fund_asset(req.asset, req.amount))
+# @app.post("/admin/fund", tags=["Admin"], dependencies=prod_depends)
+# def fund(req: FundReq):
+#     return _g(ENGINE.fund_asset(req.asset, req.amount))
 
+# @app.post("/admin/withdraw", tags=["Admin"], dependencies=prod_depends)
+# def withdraw(req: WithdrawReq):
+#     return _g(ENGINE.withdraw_asset(req.asset, req.amount))
 
 @app.delete("/admin/data", tags=["Admin"], dependencies=prod_depends)
 def purge_all():

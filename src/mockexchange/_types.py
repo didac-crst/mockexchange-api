@@ -51,6 +51,58 @@ class AssetBalance:
         )
 
 @dataclass
+class TradingPair:
+    """
+    Trading pair data structure.
+
+    Fields
+    ------
+    symbol: trading pair symbol (e.g., "BTC/USDT")  
+    price: current price of the trading pair  
+    timestamp: timestamp of the last update (in seconds since epoch)  
+    bid: current highest bid price  
+    ask: current lowest ask price  
+    bid_volume: volume at the current highest bid price  
+    ask_volume: volume at the current lowest ask price
+    """
+
+    symbol: str
+    price: float
+    timestamp: float
+    bid: float
+    ask: float
+    bid_volume: float
+    ask_volume: float
+    info: str = None
+
+    # (De)serialise ------------------------------------------------------
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "price": self.price,
+            "timestamp": self.timestamp,
+            "bid": self.bid,
+            "ask": self.ask,
+            "bid_volume": self.bid_volume,
+            "ask_volume": self.ask_volume,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "TradingPair":
+        return cls(
+            symbol=d["symbol"],
+            price=float(d["price"]),
+            timestamp=float(d["timestamp"]),
+            bid=float(d["bid"]),
+            ask=float(d["ask"]),
+            bid_volume=float(d["bid_volume"]),
+            ask_volume=float(d["ask_volume"]),
+        )
+    
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), separators=(",", ":"))
+
+@dataclass
 class OrderHistory:
     """
     Order history entry.

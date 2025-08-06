@@ -132,7 +132,7 @@ class OrderBook:
             if (o.status.value if isinstance(o.status, OrderState) else o.status) in status
         ]
 
-        # chronological order
+        # chronological order on update timestamp
         orders.sort(key=lambda o: o.ts_update, reverse=True)
         if tail is not None and tail > 0:
             orders = orders[:tail]
