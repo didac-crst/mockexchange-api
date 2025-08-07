@@ -61,7 +61,7 @@ And held some more.
 
 Then came **2017** — the year of Lambos, moon memes, and FOMO-induced insomnia.  
 I began checking prices at night before bed, and again first thing in the morning —
-not for fun, but to confirm whether I was now rich… or ruined.
+not for fun, but to confirm whether I was now rich… or still stuck working 9 to 5.
 
 This, of course, led me to the **classic rookie move**: diversification.  
 I dove into altcoins with names like **LTC**, **TROY**, and others I’ve repressed like a bad haircut from high school.  
