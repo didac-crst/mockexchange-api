@@ -103,7 +103,7 @@ But ideas need hardware.
 So I bought my first Raspberry Pi.  
 Because if I was going to burn time, I wasn’t about to burn kilowatts.  
 I needed something that could run 24/7 without turning my electricity bill into a second mortgage.  
-Small, quiet, efficient — like a monk with GPIO pins.  
+Small, quiet, efficient — like a monk with a TPU, ready to meditate on market patterns in silence.  
 It wasn’t much — but it was enough to get started.
 
 From there, the system began to grow — and spiral.  
