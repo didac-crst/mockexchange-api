@@ -100,16 +100,25 @@ Not to get rich — but because this is what I do for fun:
 connect dots, explore computer science, study markets, and challenge my past self  
 with fewer emotional trades and more intelligent systems.
 
-So I rolled up my sleeves and began building the entire **trading bot infrastructure** —  
-exchange emulator, signal engine, execution logic, backtesting framework… the works.  
-It’s a beast of a project, and I honestly don’t know if I’ll ever fully finish it —  
-but that’s beside the point.  
+But ideas need hardware.  
+So I bought my first Raspberry Pi.  
+Because if I was going to burn time, I wasn’t about to burn kilowatts.  
+I needed something that could run 24/7 without turning my electricity bill into a second mortgage.  
+Small, quiet, efficient — like a monk with GPIO pins.  
+It wasn’t much — but it was enough to get started.
+
+From there, the system began to grow — and spiral.  
+Scraping prices, keeping databases efficient, aggregating data, archiving old data,  
+writing little scripts that somehow become immortal zombie processes needing to be killed by hand...  
+I genuinely didn’t expect it to be so much.
+
+And yet — I like it.  
 This is how I relax: by designing systems no one asked for, solving problems I created myself,  
 and occasionally shouting at pandas because my columns won't align.
 
 Which brings us to **2025**, and **MockExchange**:  
 a stateless, deterministic, no-risk spot-exchange emulator that speaks fluent **ccxt**,  
-pretends it’s real, and stores every price-tick, balance and order in **Valkey** (aka Redis) —  
+pretends it’s real, and stores the last price-tick, balance and order in **Valkey** (aka Redis) —  
 instead of touching live markets — so you can test, dry-run, and debug your bot  
 without risking a single satoshi.
 
