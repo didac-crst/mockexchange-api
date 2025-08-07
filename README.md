@@ -1,6 +1,120 @@
-# MockExchange API 📈  
+# MockExchange API 📈
 
-A **zero-risk** spot-exchange emulator that speaks the exact JSON dialect your **ccxt-based** trading bots expect — yet writes every price-tick, balance and order to **Valkey (aka Redis)** instead of touching live markets.  
+**_Trade without fear, greed, or actual money — because sometimes the best way to lose less is to not play at all._**
+
+---
+
+## Table of Contents
+
+- [TL;DR](#tldr)
+- [The Story](#the-story)
+- [Core Features](#core-features)
+- [Quick Start (Docker)](#quick-start-docker)
+- [Environment Variables](#environment-variables-complete)
+- [Authentication](#authentication)
+- [REST Endpoints](#rest-endpoints)
+- [Example Workflow](#example-workflow)
+- [Tick-loop Internals](#tick-loop-internals)
+- [Installation (from source)](#installation-from-source)
+- [Using the CLI (`mockx`)](#using-the-cli-mockx)
+- [Running the Test-suite](#running-the-test-suite-)
+- [Dry Run Example](#dry-run-example-)
+- [Repo Layout](#repo-layout-updated-2025-07)
+- [Development Notes](#development-notes)
+- [Front-end Dashboard](#front-end-dashboard)
+- [Gateway](#gateway)
+- [Contributing](#contributing)
+- [License](#license-)
+
+---
+
+## TL;DR
+
+- Want to test your trading bot **without risk**?
+- MockExchange simulates a full ccxt-compatible exchange — but runs entirely in memory.
+- Plug in market data, issue orders, get fills.
+- No real assets involved.
+- Backtests, dry runs, live testing (safely).
+
+---
+
+## The Story
+
+> It all started back in **2013**, when Bitcoin was trading at a jaw-dropping **$300** —  
+> an absurd price, according to a WhatsApp group of early tech-head friends who smugly informed me:  
+> *“You’re too late.”*
+
+But something about it intrigued me. I didn’t fully understand it.  
+I didn’t even think it would work — and yet, I bought in.  
+Just **2/3 of a BTC**, about **180 €**, which, at the time, I mentally wrote off as *“money I’ll never see again.”*  
+Spoiler: it was the **best terrible financial decision** I’ve ever made.
+
+I held.  
+And held.  
+And held some more.
+
+Then came **2017** — the year of Lambos, moon memes, and FOMO-induced insomnia.  
+I began checking prices at night before bed, and again first thing in the morning —  
+not for fun, but to confirm whether I was now rich… or ruined.
+
+This, of course, led me to the **classic rookie move**: diversification.  
+I dove into altcoins with names like **LTC**, **TROY**, and others I’ve repressed like a bad haircut from high school.  
+Let’s just say: they didn’t go to the moon — they dug a tunnel.
+
+Decision after decision, I watched my gains **evaporate in slow motion**.  
+Eventually, I realized I needed help.  
+Not from a financial advisor — they’d only remind me of my poor decisions —  
+but from a **machine**.
+
+Something logical.  
+Emotionless.  
+Free from fear and greed.  
+Unimpressed by sudden price spikes or Twitter hype.  
+A system that wouldn’t panic sell or chase pumps — because it **couldn’t**.
+
+I wanted an intelligent system that could make decisions based on **data**, not **dopamine**.  
+Something that would just execute the plan, no matter how boring or unsexy that plan was.  
+Something more disciplined than I’d ever been.
+
+In short, I wanted to build a **trader with no feelings** —  
+like a **psychopath**, but helpful.
+
+So in **2020**, full of optimism and free time, I enrolled in an **AI-for-trading** program.  
+I was ready to automate the pain away.
+
+Then… I became a dad.
+
+Suddenly, my trading ambitions were replaced with diapers, sleep deprivation,  
+and learning the fine art of **negotiating with toddlers**.  
+Needless to say, the bot went on standby — alongside my hobbies, ambitions, and most adult-level reasoning.
+
+Fast forward to **2024**. The kids sleep (sometimes), and my curiosity roared back to life.  
+I decided it was time to build — **for real**.  
+Not to get rich — but because this is what I do for fun:  
+connect dots, explore computer science, study markets, and challenge my past self  
+with fewer emotional trades and more intelligent systems.
+
+So I rolled up my sleeves and began building the entire **trading bot infrastructure** —  
+exchange emulator, signal engine, execution logic, backtesting framework… the works.  
+It’s a beast of a project, and I honestly don’t know if I’ll ever fully finish it —  
+but that’s beside the point.  
+This is how I relax: by designing systems no one asked for, solving problems I created myself,  
+and occasionally shouting at pandas because my columns won't align.
+
+Which brings us to **2025**, and **MockExchange**:  
+a stateless, deterministic, no-risk spot-exchange emulator that speaks fluent **ccxt**,  
+pretends it’s real, and stores every price-tick, balance and order in **Valkey** (aka Redis) —  
+instead of touching live markets — so you can test, dry-run, and debug your bot  
+without risking a single satoshi.
+
+No more fear.  
+No more “should I have bought?” or “why did I sell?”  
+Just logic, fake orders, and enough tooling to safely build the thing  
+that trades smarter than I did.
+
+---
+
+## Core Features
 
 * **One binary, three faces**  
     * 🐍 Import as a normal Python package in your back-tests.  
