@@ -40,9 +40,15 @@
 
 ## The Story
 
-> It all started back in **2013**, when Bitcoin was trading at a jaw-dropping **$300** —  
-> an absurd price, according to a WhatsApp group of early tech-head friends who smugly informed me:  
-> *“You’re too late.”*
+> It was **2013**, and Bitcoin had just hit a jaw-dropping **$300**.  
+> Someone in our old engineering WhatsApp group brought it up.  
+> I asked innocently, *“What’s that?”*  
+>  
+> The response came instantly, dripping with confidence:  
+> *“You’re too late — this bubble is about to burst…”*  
+>  
+> Which, in hindsight, was probably the most confidently  
+> wrong (and overly cautious) financial advice I’ve ever received.
 
 But something about it intrigued me. I didn’t fully understand it.  
 I didn’t even think it would work — and yet, I bought in.  
