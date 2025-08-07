@@ -68,9 +68,8 @@ I dove into altcoins with names like **LTC**, **TROY**, and others I’ve repres
 Let’s just say: they didn’t go to the moon — they dug a tunnel.
 
 Decision after decision, I watched my gains **evaporate in slow motion**.  
-Eventually, I realized I needed help.  
-Not from a financial advisor — they’d only remind me of my poor decisions —
-but from a **machine**.
+Eventually, I realized I needed support — not from a financial advisor (they’d only
+remind me of my poor decisions), but from something more aligned with my goals — not theirs.
 
 Something logical.  
 Emotionless.  
