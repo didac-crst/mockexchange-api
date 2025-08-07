@@ -108,7 +108,7 @@ Small, quiet, efficient — like a monk with GPIO pins.
 It wasn’t much — but it was enough to get started.
 
 From there, the system began to grow — and spiral.  
-Scraping prices, keeping databases efficient, aggregating data, archiving old data,
+Scraping prices in real time, keeping databases efficient, aggregating data, archiving old data,
 writing little scripts that somehow become immortal zombie processes needing to be killed by hand...  
 I genuinely didn’t expect it to be so much.
 
