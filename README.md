@@ -47,7 +47,7 @@
 > The response came instantly, dripping with confidence:  
 > *“You’re too late — this bubble is about to burst…”*  
 >  
-> Which, in hindsight, was probably the most confidently  
+> Which, in hindsight, was probably the most confidently
 > wrong (and overly cautious) financial advice I’ve ever received.
 
 But something about it intrigued me. I didn’t fully understand it.  
@@ -60,7 +60,7 @@ And held.
 And held some more.
 
 Then came **2017** — the year of Lambos, moon memes, and FOMO-induced insomnia.  
-I began checking prices at night before bed, and again first thing in the morning —  
+I began checking prices at night before bed, and again first thing in the morning —
 not for fun, but to confirm whether I was now rich… or ruined.
 
 This, of course, led me to the **classic rookie move**: diversification.  
@@ -69,7 +69,7 @@ Let’s just say: they didn’t go to the moon — they dug a tunnel.
 
 Decision after decision, I watched my gains **evaporate in slow motion**.  
 Eventually, I realized I needed help.  
-Not from a financial advisor — they’d only remind me of my poor decisions —  
+Not from a financial advisor — they’d only remind me of my poor decisions —
 but from a **machine**.
 
 Something logical.  
@@ -82,7 +82,7 @@ I wanted an intelligent system that could make decisions based on **data**, not 
 Something that would just execute the plan, no matter how boring or unsexy that plan was.  
 Something more disciplined than I’d ever been.
 
-In short, I wanted to build a **trader with no feelings** —  
+In short, I wanted to build a **trader with no feelings** —
 like a **psychopath**, but helpful.
 
 So in **2020**, full of optimism and free time, I enrolled in an **AI-for-trading** program.  
@@ -90,14 +90,14 @@ I was ready to automate the pain away.
 
 Then… I became a dad.
 
-Suddenly, my trading ambitions were replaced with diapers, sleep deprivation,  
+Suddenly, my trading ambitions were replaced with diapers, sleep deprivation,
 and learning the fine art of **negotiating with toddlers**.  
 Needless to say, the bot went on standby — alongside my hobbies, ambitions, and most adult-level reasoning.
 
 Fast forward to **2024**. The kids sleep (sometimes), and my curiosity roared back to life.  
 I decided it was time to build — **for real**.  
-Not to get rich — but because this is what I do for fun:  
-connect dots, explore computer science, study markets, and challenge my past self  
+Not to get rich — but because this is what I do for fun:
+connect dots, explore computer science, study markets, and challenge my past self
 with fewer emotional trades and more intelligent systems.
 
 But ideas need hardware.  
@@ -108,23 +108,23 @@ Small, quiet, efficient — like a monk with GPIO pins.
 It wasn’t much — but it was enough to get started.
 
 From there, the system began to grow — and spiral.  
-Scraping prices, keeping databases efficient, aggregating data, archiving old data,  
+Scraping prices, keeping databases efficient, aggregating data, archiving old data,
 writing little scripts that somehow become immortal zombie processes needing to be killed by hand...  
 I genuinely didn’t expect it to be so much.
 
 And yet — I like it.  
-This is how I relax: by designing systems no one asked for, solving problems I created myself,  
+This is how I relax: by designing systems no one asked for, solving problems I created myself,
 and occasionally shouting at pandas because my columns won't align.
 
 Which brings us to **2025**, and **MockExchange**:  
-a stateless, deterministic, no-risk spot-exchange emulator that speaks fluent **ccxt**,  
-pretends it’s real, and stores the last price-tick, balance and order in **Valkey** (aka Redis) —  
-instead of touching live markets — so you can test, dry-run, and debug your bot  
+a stateless, deterministic, no-risk spot-exchange emulator that speaks fluent **ccxt**,
+pretends it’s real, and stores the last price-tick, balance and order in **Valkey** (aka Redis) —
+instead of touching live markets — so you can test, dry-run, and debug your bot
 without risking a single satoshi.
 
 No more fear.  
 No more “should I have bought?” or “why did I sell?”  
-Just logic, fake orders, and enough tooling to safely build the thing  
+Just logic, fake orders, and enough tooling to safely build the thing
 that trades smarter than I did.
 
 ---
