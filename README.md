@@ -75,7 +75,7 @@ Something logical.
 Emotionless.  
 Free from fear and greed.  
 Unimpressed by sudden price spikes or Twitter hype.  
-A system that wouldn’t panic sell or chase pumps — because it **couldn’t**.
+A system that won’t panic sell or chase pumps — because it doesn’t have emotions to mess things up.
 
 I wanted an intelligent system that could make decisions based on **data**, not **dopamine**.  
 Something that would just execute the plan, no matter how boring or unsexy that plan was.  
