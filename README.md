@@ -71,15 +71,15 @@ Decision after decision, I watched my gains **evaporate in slow motion**.
 Eventually, I realized I needed support — not from a financial advisor (they’d only
 remind me of my poor decisions), but from something more aligned with my goals — not theirs.
 
-Something logical.  
+**Something logical**.  
 Emotionless.  
 Free from fear and greed.  
 Unimpressed by sudden price spikes or Twitter hype.  
-A system that won’t panic sell or chase pumps — because it doesn’t have emotions to mess things up.
+A system that won’t panic sell or chase pumps.
 
 I wanted an intelligent system that could make decisions based on **data**, not **dopamine**.  
 Something that would just execute the plan, no matter how boring or unsexy that plan was.  
-Something more disciplined than I’d ever been.
+Something more disciplined than I’d ever been — able to stay locked on a single task for hours, without fatigue, distraction, or the urge to check the news.
 
 In short, I wanted to build a **trader with no feelings** —
 like a **psychopath**, but helpful.
@@ -103,8 +103,8 @@ But ideas need hardware.
 So I bought my first Raspberry Pi.  
 Because if I was going to burn time, I wasn’t about to burn kilowatts.  
 I needed something that could run 24/7 without turning my electricity bill into a second mortgage.  
-Small, quiet, efficient — like a monk with a TPU, ready to meditate on market patterns in silence.  
-It wasn’t much — but it was enough to get started.
+Resilient, quiet, efficient — like a monk with a TPU, ready to meditate on market patterns in silence for as long as it takes.  
+It wasn’t much, but it was enough to get started.
 
 From there, the system began to grow — and spiral.  
 Scraping prices in real time, keeping databases efficient, aggregating data, archiving old data,
@@ -112,8 +112,8 @@ writing little scripts that somehow become immortal zombie processes needing to 
 I genuinely didn’t expect it to be so much.
 
 And yet — I like it.  
-This is how I relax: by designing systems no one asked for, solving problems I created myself,
-and occasionally shouting at pandas because my columns won't align.
+This is how I relax: designing systems no one asked for, solving problems I created myself,  
+and picking up strange new skills in the process — the kind you never set out to learn, but somehow end up mastering.
 
 Which brings us to **2025**, and **MockExchange**:  
 a stateless, deterministic, no-risk spot-exchange emulator that speaks fluent **ccxt**,
